@@ -1152,6 +1152,11 @@ randomfill@^1.0.3:
     randombytes "^2.0.5"
     safe-buffer "^5.1.0"
 
+ray-tracing-renderer@^0.2.0:
+  version "0.2.0"
+  resolved "https://registry.yarnpkg.com/ray-tracing-renderer/-/ray-tracing-renderer-0.2.0.tgz#dbced5e1b932499b7163eff477cb99903ccdef80"
+  integrity sha512-hAh5xxfHamAJLNc/Nk2Ly0+qW7txLMGkh3to/4cZlHoC3NasrJBsLFbOYEh21DCYC2vAL4yAxvgzWPi2iux+mQ==
+
 read-only-stream@^2.0.0:
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/read-only-stream/-/read-only-stream-2.0.0.tgz#2724fd6a8113d73764ac288d4386270c1dbf17f0"

@@ -12,7 +12,9 @@
     "glsl-noise": "^0.0.0",
     "load-asset": "^1.2.0",
     "load-image": "^1.0.0",
+    "ray-tracing-renderer": "^0.2.0",
     "simple-html-index": "^1.5.0",
+    "simplex-noise": "^2.4.0",
     "svg-path-interpolator": "^0.2.5",
     "three": "^0.105.2",
     "webgl-noise": "^0.0.1"
