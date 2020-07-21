@@ -8,6 +8,7 @@
     "canvas-sketch": "^0.5.0",
     "canvas-sketch-util": "^1.8.0",
     "colormap": "^2.3.1",
+    "dat.gui": "^0.7.7",
     "fs-extra": "^8.0.1",
     "glsl-noise": "^0.0.0",
     "load-asset": "^1.2.0",
@@ -16,7 +17,10 @@
     "simple-html-index": "^1.5.0",
     "simplex-noise": "^2.4.0",
     "svg-path-interpolator": "^0.2.5",
-    "three": "^0.105.2",
+    "three": "^0.115.0",
+    "three-envmap-helper": "^1.0.2",
+    "three-matcap-material": "^1.0.0",
+    "three.meshline": "^1.2.0",
     "webgl-noise": "^0.0.1"
   }
 }

@@ -1,5 +1,6 @@
 const canvasSketch = require("canvas-sketch");
 const SimplexNoise = require("simplex-noise");
+const glslify = require("glslify");
 const noise = new SimplexNoise();
 
 // Ensure ThreeJS is in global scope for the 'examples/'
@@ -44,28 +45,54 @@ const sketch = ({ context }) => {
   const light = new THREE.PointLight("#45caf7", 1, 15.5);
   light.position.set(2, 2, -4).multiplyScalar(1.5);
   scene.add(light);
-  const numOffsets = 250;
-  const offsetAmt = 1;
-  for (var line = 0; line < 5; line++) {
+
+  const fragmentShader = glslify`
+      void main() {
+        gl_FragColor = vec4(1.0, 0.0, 1.0, 0.02);
+      }
+       
+      `;
+  const vertexShader = glslify`
+  attribute float lineNum;
+  uniform float numLines;
+  uniform float time;
+  #pragma glslify: snoise3 = require(glsl-noise/simplex/3d)
+      void main() 
+{
+  vec3 offsetPos = position.xyz
+    + snoise3(vec3(position.xy, time * 0.1)) * 0.2 * (lineNum / numLines + 0.5);
+  vec4 modelViewPosition = modelViewMatrix * vec4(offsetPos, 1.0);
+  gl_Position = projectionMatrix * modelViewPosition;
+  gl_PointSize = 4.0;
+}
+
+      `;
+  const numOffsets = 550;
+  for (var line = 0; line < 1; line++) {
     for (var i = 0; i < numOffsets; i++) {
       const vertices = [];
+      const thetas = [];
+      const lineNums = [];
       for (var theta = 0; theta < (Math.PI / 2) * 3; theta += 0.01) {
         var x = Math.cos(theta) * (1 + line * 0.3);
         var y = Math.sin(theta) * (1 + line * 0.3);
         var z = 0;
-        const thetaAmt = Math.max(0, theta - 1) / ((3 * Math.PI) / 2 - 1);
-        var offX =
-          ((noise.noise3D(x, y, z) * i) / numOffsets) * offsetAmt * thetaAmt;
-        var offY =
-          ((noise.noise3D(y, z, x) * i) / numOffsets) * offsetAmt * thetaAmt;
-        var offZ =
-          ((noise.noise3D(z, x, y) * i) / numOffsets) * offsetAmt * thetaAmt;
-        vertices.push(x + offX, y + offY, z + offZ);
+        vertices.push(x, y, z);
+        lineNums.push(i);
+        thetas.push(theta);
       }
       const geometry = new THREE.BufferGeometry();
       geometry.addAttribute(
         "position",
         new THREE.Float32BufferAttribute(vertices, 3)
+      );
+      geometry.addAttribute(
+        "theta",
+        new THREE.Float32BufferAttribute(thetas, 1)
+      );
+      geometry.addAttribute(
+        "lineNum",
+        new THREE.Float32BufferAttribute(lineNums, 1)
       );
 
       // const material = new THREE.LineBasicMaterial({
@@ -75,28 +102,19 @@ const sketch = ({ context }) => {
       //   alphaTest: false,
       //   depthTest: false
       // });
-      const fragmentShader = `
-      void main() {
-        gl_FragColor = vec4(1.0, 0.0, 1.0, 0.1);
-      }
-       
-      `;
-      const vertexShader = `
-      void main() 
-{
-	vec4 modelViewPosition = modelViewMatrix * vec4(position, 1.0);
-	gl_Position = projectionMatrix * modelViewPosition;
-}
 
-      `;
       const material = new THREE.ShaderMaterial({
         fragmentShader,
         vertexShader,
         transparent: true,
-        depthTest: false
+        depthTest: false,
+        uniforms: {
+          numLines: { value: numOffsets },
+          time: { value: 0 }
+        }
       });
 
-      const particles = new THREE.Line(geometry, material);
+      const particles = new THREE.Points(geometry, material);
       scene.add(particles);
     }
   }
@@ -111,6 +129,15 @@ const sketch = ({ context }) => {
     },
     // Update & render your scene here
     render({ time }) {
+      scene.children.forEach(child => {
+        if (
+          child.material &&
+          child.material.uniforms &&
+          child.material.uniforms.time
+        ) {
+          child.material.uniforms.time.value = time;
+        }
+      });
       controls.update();
       renderer.render(scene, camera);
     },
