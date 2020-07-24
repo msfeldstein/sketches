@@ -2,6 +2,9 @@ const canvasSketch = require("canvas-sketch");
 const noise = require("../perlin").noise;
 const eps = 0.0001;
 
+const noiseScale = 14000;
+const strokeColor = "black";
+const backgroundColor = "#064273";
 const colors = [
   // "#009C72",
   // "#00B887",
@@ -16,11 +19,11 @@ const colors = [
   // "#00DFC2",
   // "#009D5D",
 
-  "#17DEEE",
-  "#FF7F50",
-  "#FF4162",
-  "#F2E50B",
-  "#21B20C",
+  // "#17DEEE",
+  // "#FF7F50",
+  // "#FF4162",
+  // "#F2E50B",
+  // "#21B20C",
 
   // "#8ae0c5",
   // "#a5e8db",
@@ -29,10 +32,10 @@ const colors = [
   // "#b3abd6",
 
   // "#064273",
-  // "#76b6c4",
-  // "#7fcdff",
-  // "#1da2d8",
-  // "#def3f6",
+  "#76b6c4",
+  "#7fcdff",
+  "#1da2d8",
+  "#def3f6",
 ];
 const settings = {
   dimensions: [2048, 2048],
@@ -67,7 +70,7 @@ const sketch = ({ width, height, context, canvas }) => {
   const yOff = Math.random() * 10000;
   console.log({ xOff, yOff });
 
-  context.fillStyle = "#white";
+  context.fillStyle = backgroundColor;
   context.fillRect(0, 0, width, height);
 
   particles.forEach((particle) => {
@@ -75,7 +78,6 @@ const sketch = ({ width, height, context, canvas }) => {
     particle.y = particle.origY;
   });
   return ({ context, width, height, time }) => {
-    const noiseScale = 14000;
     const field = (x, y) => {
       return (
         noise.simplex2(
@@ -132,7 +134,7 @@ const sketch = ({ width, height, context, canvas }) => {
           break;
         if (Math.random() > 0.999) {
           context.lineWidth = 30;
-          context.strokeStyle = "black";
+          context.strokeStyle = strokeColor;
           context.stroke();
           context.lineWidth = 20;
           context.strokeStyle = particle.color;
