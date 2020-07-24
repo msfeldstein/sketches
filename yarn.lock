@@ -31,9 +31,9 @@ acorn-walk@^6.1.1:
   integrity sha512-OtUw6JUTgxA2QoqqmrmQ7F2NYqiBPi/L2jqHyFtllhOUvXYQXf0Z1CYUinIfyT4bTCGmrA7gX9FvHA81uzCoVw==
 
 acorn@^6.1.1:
-  version "6.1.1"
-  resolved "https://registry.yarnpkg.com/acorn/-/acorn-6.1.1.tgz#7d25ae05bb8ad1f9b699108e1094ecd7884adc1f"
-  integrity sha512-jPTiwtOxaHNaAPg/dmrJ/beuzLRnXtB0kQPQ8JpotKJgTB6rX6c8mlf315941pyjBSaPg8NHXS9fhP4u17DpGA==
+  version "6.4.1"
+  resolved "https://registry.yarnpkg.com/acorn/-/acorn-6.4.1.tgz#531e58ba3f51b9dacb9a6646ca4debf5b14ca474"
+  integrity sha512-ZVA9k326Nwrj3Cj9jlh3wGFutC2ZornPNARZwsNYqQYgN0EsV2d53w5RN/co65Ohn4sUAUtb1rSUAOD6XN9idA==
 
 almost-equal@^1.1.0:
   version "1.1.0"
@@ -1363,6 +1363,11 @@ three-envmap-helper@^1.0.2:
   version "1.0.2"
   resolved "https://registry.yarnpkg.com/three-envmap-helper/-/three-envmap-helper-1.0.2.tgz#135d4ea9e24e8069955f3f96bc6fd0761d06ea92"
   integrity sha512-hqsS1Q8dmnZXR4aTdLLcWzXYUvUP65Si0UeaItkhPW/DveCBOfxQWBdHpr9otPgLofiaGedaNJJmTtFlSNoqCA==
+
+three-gltf-downloader@^1.0.3:
+  version "1.0.3"
+  resolved "https://registry.yarnpkg.com/three-gltf-downloader/-/three-gltf-downloader-1.0.3.tgz#3e0d4a9aaf5390a6ad0da3cfc5a05cbef5656e19"
+  integrity sha512-bnW4exHTPWjzVmcbkGxDxPlpkfWEqNXg+rGl5OIwiGpLQZ3nl8aRxmjbwI74PeMNOF31xo6eHj2BMOQm2+H0XQ==
 
 three-matcap-material@^1.0.0:
   version "1.0.0"
