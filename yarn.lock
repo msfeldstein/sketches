@@ -1364,6 +1364,11 @@ three-envmap-helper@^1.0.2:
   resolved "https://registry.yarnpkg.com/three-envmap-helper/-/three-envmap-helper-1.0.2.tgz#135d4ea9e24e8069955f3f96bc6fd0761d06ea92"
   integrity sha512-hqsS1Q8dmnZXR4aTdLLcWzXYUvUP65Si0UeaItkhPW/DveCBOfxQWBdHpr9otPgLofiaGedaNJJmTtFlSNoqCA==
 
+three-gltf-downloader@^1.0.3:
+  version "1.0.3"
+  resolved "https://registry.yarnpkg.com/three-gltf-downloader/-/three-gltf-downloader-1.0.3.tgz#3e0d4a9aaf5390a6ad0da3cfc5a05cbef5656e19"
+  integrity sha512-bnW4exHTPWjzVmcbkGxDxPlpkfWEqNXg+rGl5OIwiGpLQZ3nl8aRxmjbwI74PeMNOF31xo6eHj2BMOQm2+H0XQ==
+
 three-matcap-material@^1.0.0:
   version "1.0.0"
   resolved "https://registry.yarnpkg.com/three-matcap-material/-/three-matcap-material-1.0.0.tgz#52fc004fa52dfcb680ed23c4c3ec747874e29499"
@@ -1374,10 +1379,10 @@ three.meshline@^1.2.0:
   resolved "https://registry.yarnpkg.com/three.meshline/-/three.meshline-1.2.0.tgz#89a0c9d67d8062e5649dc0ac9aa16f14e7c199b5"
   integrity sha512-E7s9xwgjUhQWIvXBMIdCOIvpT1qV9UlntzaaJTWzJvYtvI2ZvVsX8EM8FxoiG5aptXuKbp5osnvcJCCkYOjmBA==
 
-three@^0.115.0:
-  version "0.115.0"
-  resolved "https://registry.yarnpkg.com/three/-/three-0.115.0.tgz#540d800c381b9da2334c024f0fbe4d23f84eb05e"
-  integrity sha512-mAV2Ky3RdcbdSbR9capI+tKLvRldWYxd4151PZTT/o7+U2jh9Is3a4KmnYwzyUAhB2ZA3pXSgCd2DOY4Tj5kow==
+three@^0.125.0:
+  version "0.125.0"
+  resolved "https://registry.yarnpkg.com/three/-/three-0.125.0.tgz#19e922b9dc51ad0b706893aeee888de68e99850a"
+  integrity sha512-qL36qUGsPQ/Ofo/RZdXwHwM7A8wzUSAIyawtjIebJSPvounUQeneSqxI0aBY2iwKpseGy+RUtj3C5f/z4poyXw==
 
 through2@^2.0.0:
   version "2.0.5"
