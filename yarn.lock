@@ -1058,9 +1058,9 @@ path-is-absolute@^1.0.0, path-is-absolute@^1.0.1:
   integrity sha1-F0uSaHNVNP+8es5r9TpanhtcX18=
 
 path-parse@^1.0.6:
-  version "1.0.6"
-  resolved "https://registry.yarnpkg.com/path-parse/-/path-parse-1.0.6.tgz#d62dbb5679405d72c4737ec58600e9ddcf06d24c"
-  integrity sha512-GSmOT2EbHrINBf9SR7CDELwlJ8AENk3Qn7OikK4nFYAu3Ote2+JYNVvkpAEQm3/TLNEJFD/xZJjzyxg3KBWOzw==
+  version "1.0.7"
+  resolved "https://registry.yarnpkg.com/path-parse/-/path-parse-1.0.7.tgz#fbc114b60ca42b30d9daf5858e4bd68bbedb6735"
+  integrity sha512-LDJzPVEEEPR+y48z93A0Ed0yXb8pAByGWo/k5YYdYgpY2/2EsOsksJrq7lOHxryrVOn1ejG6oAp8ahvOIQD8sw==
 
 path-platform@~0.11.15:
   version "0.11.15"
@@ -1363,6 +1363,11 @@ three-envmap-helper@^1.0.2:
   version "1.0.2"
   resolved "https://registry.yarnpkg.com/three-envmap-helper/-/three-envmap-helper-1.0.2.tgz#135d4ea9e24e8069955f3f96bc6fd0761d06ea92"
   integrity sha512-hqsS1Q8dmnZXR4aTdLLcWzXYUvUP65Si0UeaItkhPW/DveCBOfxQWBdHpr9otPgLofiaGedaNJJmTtFlSNoqCA==
+
+three-gltf-downloader@^1.0.3:
+  version "1.0.3"
+  resolved "https://registry.yarnpkg.com/three-gltf-downloader/-/three-gltf-downloader-1.0.3.tgz#3e0d4a9aaf5390a6ad0da3cfc5a05cbef5656e19"
+  integrity sha512-bnW4exHTPWjzVmcbkGxDxPlpkfWEqNXg+rGl5OIwiGpLQZ3nl8aRxmjbwI74PeMNOF31xo6eHj2BMOQm2+H0XQ==
 
 three-matcap-material@^1.0.0:
   version "1.0.0"
