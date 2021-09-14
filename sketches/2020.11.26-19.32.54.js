@@ -1,37 +1,36 @@
-const canvasSketch = require('canvas-sketch');
-const createRegl = require('regl');
-const hsv2rgb = require('hsv2rgb')
-const mat4 = require('gl-mat4')
-const glslify = require('glslify')
+const canvasSketch = require("canvas-sketch");
+const createRegl = require("regl");
+const hsv2rgb = require("hsv2rgb");
+const mat4 = require("gl-mat4");
+const glslify = require("glslify");
 
 const settings = {
   // Make the loop animated
   animate: true,
   // Get a WebGL canvas rather than 2D
-  context: 'webgl',
+  context: "webgl",
   // Turn on MSAA
-  attributes: { antialias: true }
+  attributes: { antialias: true },
 };
 
-const NUM_POINTS = 1e4
+const NUM_POINTS = 1e4;
 const sketch = ({ gl }) => {
   // Setup REGL with our canvas context
   const regl = createRegl({ gl });
 
-  const POINTS_PER_SIDE = 1e3
-  const top = []
-  const right = []
-  const bottom = []
-  const left = []
+  const POINTS_PER_SIDE = 1e4;
+  const top = [];
+  const right = [];
+  const bottom = [];
+  const left = [];
   for (var i = 0; i < POINTS_PER_SIDE; i++) {
-    top.push(-1 + 2 * i / POINTS_PER_SIDE, -1, 0)
-    bottom.push(1 - 2 * i / POINTS_PER_SIDE, 1, 0)
-    left.push(-1, 1 - 2 * i / POINTS_PER_SIDE, 0)
-    right.push(1, -1 + 2 * i / POINTS_PER_SIDE, 0)
+    top.push(-1 + (2 * i) / POINTS_PER_SIDE, -1, 0);
+    bottom.push(1 - (2 * i) / POINTS_PER_SIDE, 1, 0);
+    left.push(-1, 1 - (2 * i) / POINTS_PER_SIDE, 0);
+    right.push(1, -1 + (2 * i) / POINTS_PER_SIDE, 0);
   }
-  const points = [top, right, bottom, left]
-  const pointBuffer = regl.buffer(points)
-
+  const points = [top, right, bottom, left];
+  const pointBuffer = regl.buffer(points);
 
   const drawParticles = regl({
     vert: glslify`
@@ -68,28 +67,32 @@ const sketch = ({ gl }) => {
     },
 
     uniforms: {
-      noiseAmount: regl.prop('noiseAmount'),
-      scale: regl.prop('scale'),
-      view: ({tick}) => {
-        const t = Math.PI  / 2
-        return mat4.lookAt([],
+      noiseAmount: regl.prop("noiseAmount"),
+      scale: regl.prop("scale"),
+      view: ({ tick }) => {
+        const t = Math.PI / 2;
+        return mat4.lookAt(
+          [],
           [30 * Math.cos(t), 2.5, 30 * Math.sin(t)],
           [0, 0, 0],
-          [0, 1, 0])
+          [0, 1, 0]
+        );
       },
-      projection: ({viewportWidth, viewportHeight}) =>
-        mat4.perspective([],
+      projection: ({ viewportWidth, viewportHeight }) =>
+        mat4.perspective(
+          [],
           Math.PI / 4,
           viewportWidth / viewportHeight,
           0.01,
-          1000),
-      time: ({tick}) => tick * 0.001
+          1000
+        ),
+      time: ({ tick }) => tick * 0.001,
     },
 
     count: POINTS_PER_SIDE * 4,
 
-    primitive: 'points'
-  })
+    primitive: "points",
+  });
 
   // Regl GL draw commands
   // ...
@@ -101,31 +104,50 @@ const sketch = ({ gl }) => {
 
     // Clear back buffer
     regl.clear({
-      color: [ 0, 0, 0, 1 ]
+      color: [0, 0, 0, 1],
     });
 
-  regl.clear({
-    depth: 1,
-    color: [0, 0, 0, 1]
-  })
-
+    regl.clear({
+      depth: 1,
+      color: [0, 0, 0, 1],
+    });
+    const speed = 1.3;
     drawParticles({
-      noiseAmount: 0,
-      scale: 1
-    })
+      noiseAmount: Math.max(0, Math.sin(time * speed) * 0.7),
+      scale: 2,
+    });
     drawParticles({
-      noiseAmount: .1,
-      scale: 1.5
-    })
+      noiseAmount: Math.max(0, Math.sin(time * speed + Math.PI / 6) * 0.7),
+      scale: 3,
+    });
     drawParticles({
-      noiseAmount: .2,
-      scale: 2
-    })
+      noiseAmount: Math.max(
+        0,
+        Math.sin(time * speed + (Math.PI / 6) * 2) * 0.7
+      ),
+      scale: 4,
+    });
     drawParticles({
-      noiseAmount: .4,
-      scale: 2.5
-    })
-
+      noiseAmount: Math.max(
+        0,
+        Math.sin(time * speed + (Math.PI / 6) * 3) * 0.7
+      ),
+      scale: 5,
+    });
+    drawParticles({
+      noiseAmount: Math.max(
+        0,
+        Math.sin(time * speed + (Math.PI / 6) * 4) * 0.7
+      ),
+      scale: 6,
+    });
+    drawParticles({
+      noiseAmount: Math.max(
+        0,
+        Math.sin(time * speed + (Math.PI / 6) * 5) * 0.7
+      ),
+      scale: 7,
+    });
   };
 };
 

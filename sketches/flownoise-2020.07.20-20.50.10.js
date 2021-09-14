@@ -42,6 +42,11 @@ const settings = {
   animate: true,
 };
 
+let nextRand = 2;
+function random() {
+  return noise.simplex2(0, nextRand++) * 0.5 + 0.5;
+}
+
 /**
  * @param { Object } params
  * @param { CanvasRenderingContext2D} params.context
@@ -49,39 +54,31 @@ const settings = {
  * @param { number } params.height
  */
 const sketch = ({ width, height, context, canvas }) => {
-  const particles = [];
-  for (var i = 0; i < 400; i++) {
-    const theta = Math.random() * Math.PI * 2 - Math.PI;
-    const r = (Math.random() * width) / 2;
-    particles.push({
-      origX: Math.random() * width,
-      origY: Math.random() * height,
-      color: colors[Math.floor(Math.random() * colors.length)],
+  return ({ context, width, height, frame, time }) => {
+    nextRand = frame / 100000000 + 3;
+    const particles = [];
+    for (var i = 0; i < 400; i++) {
+      particles.push({
+        origX: random() * width,
+        origY: random() * height,
+        color: colors[Math.floor(random() * colors.length)],
+      });
+    }
+
+    const xOff = random() * 10000;
+    const yOff = random() * 10000;
+
+    particles.forEach((particle) => {
+      particle.x = particle.origX;
+      particle.y = particle.origY;
     });
-  }
+    context.fillStyle = backgroundColor;
+    context.fillRect(0, 0, width, height);
 
-  const drawParticle = (particle) => {
-    context.beginPath();
-    context.fillStyle = particle.color;
-    context.fillRect(particle.x, particle.y, 1, 1);
-  };
-
-  const xOff = Math.random() * 10000;
-  const yOff = Math.random() * 10000;
-  console.log({ xOff, yOff });
-
-  context.fillStyle = backgroundColor;
-  context.fillRect(0, 0, width, height);
-
-  particles.forEach((particle) => {
-    particle.x = particle.origX;
-    particle.y = particle.origY;
-  });
-  return ({ context, width, height, time }) => {
     const field = (x, y) => {
       return (
         noise.simplex2(
-          x / noiseScale + xOff + time / 1000,
+          x / noiseScale + xOff + 0 / 1000,
           y / noiseScale + yOff
         ) *
           0.5 +
@@ -119,9 +116,9 @@ const sketch = ({ width, height, context, canvas }) => {
       context.lineCap = "round";
       context.beginPath();
       context.moveTo(particle.x, particle.y);
-      const steps = 200 + Math.random() * 4000;
+      const steps = 200 + random() * 4000;
       for (var i = 0; i < steps; i++) {
-        for (var j = 0; j < 20 * Math.random(); j++) {
+        for (var j = 0; j < 20 * random(); j++) {
           stepParticle(particle);
           context.lineTo(particle.x, particle.y);
         }
@@ -132,15 +129,15 @@ const sketch = ({ width, height, context, canvas }) => {
           particle.y < height * 0.1
         )
           break;
-        if (Math.random() > 0.999) {
-          context.lineWidth = 30;
-          context.strokeStyle = strokeColor;
-          context.stroke();
-          context.lineWidth = 20;
-          context.strokeStyle = particle.color;
-          context.stroke();
-          context.beginPath();
-        }
+        // if (Math.random() > 0.999) {
+        //   context.lineWidth = 30;
+        //   context.strokeStyle = strokeColor;
+        //   context.stroke();
+        //   context.lineWidth = 20;
+        //   context.strokeStyle = particle.color;
+        //   context.stroke();
+        //   context.beginPath();
+        // }
       }
       context.lineWidth = 30;
       context.strokeStyle = "black";

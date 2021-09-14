@@ -4,9 +4,15 @@ global.THREE = require("three");
 // Include any additional ThreeJS examples below
 require("three/examples/js/controls/OrbitControls");
 require('three/examples/js/loaders/RGBELoader.js')
+require('three/examples/js/exporters/GLTFExporter.js')
 const HDRCubeTextureLoader = require('three/examples/js/loaders/HDRCubeTextureLoader.js')
 const canvasSketch = require("canvas-sketch");
-const { Side } = require("three");
+
+const Cuts = {
+  Swiss: require("./gems/swiss"),
+  Single: require('./gems/singlecut')
+}
+
 const hdrImage = "./kloppenheim_02_4k.hdr"
 
 const settings = {
@@ -32,7 +38,7 @@ const sketch = ({ context }) => {
 
   // Setup a camera
   const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 100);
-  camera.position.set(8, 0, 1);
+  camera.position.set(4, 0, 1);
   camera.lookAt(new THREE.Vector3());
 
   // Setup camera controller
@@ -48,57 +54,41 @@ const sketch = ({ context }) => {
   const loader = new THREE.RGBELoader();
   loader.load(hdrImage, function (texture) {
     envMap = pmremGenerator.fromEquirectangular(texture)
-    scene.background = envMap.texture
-    console.log(envMap.texture)
   })
 
+  let mesh;
+
   const opts = {
+    type: "Swiss",
     numSides: 8,
-    sideEdgeHeight: 0.1
+    sideEdgeHeight: 0.1,
+    topRadius: 0.6,
+    capHeight: 0.35,
+    download: function () {
+      let exporter = new THREE.GLTFExporter()
+      exporter.parse(mesh, function (gltf) {
+        console.log(gltf)
+        const link = document.createElement('a')
+        link.href = URL.createObjectURL(new Blob([gltf], {type: 'application/octet-stream'}))
+        link.download = "Gem.glb"
+        link.click()
+      }, { binary:true })
+    }
   }
   const gui = new dat.GUI();
+  gui.add(opts, "type").options(Object.keys(Cuts)).onChange(regenerate)
   gui.add(opts, 'numSides', 4, 32, 1).onChange(regenerate)
   gui.add(opts, 'sideEdgeHeight', 0, 1).onChange(regenerate)
+  gui.add(opts, 'topRadius', 0, 1).onChange(regenerate)
+  gui.add(opts, 'capHeight', 0, 1).onChange(regenerate)
+  gui.add(opts, 'download')
 
-  let mesh;
+
   function regenerate() {
     if (mesh) {
       scene.remove(mesh)
     }
-    const vertices = []
-    for (var i = 0; i < opts.numSides; i++) {
-      const thetaStart = Math.PI * 2 / opts.numSides * i
-      const thetaStop = Math.PI * 2 / opts.numSides * (i + 1)
-      const r = 1
-      const x = r * Math.cos(thetaStart)
-      const y = r * Math.sin(thetaStart)
-      const x2 = r * Math.cos(thetaStop)
-      const y2 = r * Math.sin(thetaStop)
-
-      const bottomPoint = [0, -1, 0]
-      const lowerEdgeP1 = [x, 0, y]
-      const lowerEdgeP2 = [x2, 0, y2]
-      const upperEdgeP1 = [x, opts.sideEdgeHeight, y]
-      const upperEdgeP2 = [x2, opts.sideEdgeHeight, y2]
-      // To Bottom Point
-      vertices.push(
-        lowerEdgeP1,
-        lowerEdgeP2,
-        bottomPoint
-      )
-
-      // Side Edges
-      vertices.push(
-        lowerEdgeP2,
-        lowerEdgeP1,
-        upperEdgeP1,
-
-        lowerEdgeP2,
-        upperEdgeP1,
-        upperEdgeP2
-
-      )
-    }
+    const vertices = Cuts[opts.type](opts)
     const verticesFloatArray = new Float32Array(vertices.flat())
     // Setup a geometry
     const geometry = new THREE.BufferGeometry()

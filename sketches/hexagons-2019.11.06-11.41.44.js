@@ -2,11 +2,11 @@ const canvasSketch = require("canvas-sketch");
 
 const settings = {
   dimensions: [2048, 2048],
-  animate: true
+  animate: true,
 };
 
 const sketch = ({ context }) => {
-  const hexagon = size => {
+  const hexagon = (size) => {
     context.beginPath();
     context.moveTo(0, size);
     for (var side = 0; side < 7; side++) {
