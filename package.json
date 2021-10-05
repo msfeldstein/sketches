@@ -6,6 +6,7 @@
   "dependencies": {
     "@tensorflow-models/body-pix": "^2.2.0",
     "@tensorflow/tfjs-node": "^3.6.1",
+    "@theatre/core": "^0.4.0",
     "browserify": "^16.2.3",
     "canvas-sketch": "^0.5.0",
     "canvas-sketch-util": "^1.8.0",
@@ -21,6 +22,7 @@
     "jimp": "^0.16.1",
     "load-asset": "^1.2.0",
     "load-image": "^1.0.0",
+    "postprocessing": "^6.22.5",
     "quick-noise-js": "^1.0.2",
     "ray-tracing-renderer": "^0.2.0",
     "regl": "^2.0.1",
@@ -33,5 +35,8 @@
     "three-matcap-material": "^1.0.0",
     "three.meshline": "^1.2.0",
     "webgl-noise": "^0.0.1"
+  },
+  "devDependencies": {
+    "@theatre/studio": "^0.4.0"
   }
 }
