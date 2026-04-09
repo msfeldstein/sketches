@@ -20,7 +20,7 @@ const VAPORWAVE_COLORS = [
   "#00F5D4", // turquoise
 ];
 
-const NUM_SQUARES = 60;
+const NUM_SQUARES = 120;
 
 function seededRandom(seed) {
   let s = seed;
