@@ -71,12 +71,26 @@ function getVisibleRects(playerRoot) {
     .map(({ rect }) => rect);
 }
 
+function pinWebampToTopLeft() {
+  const centeringLayer =
+    document.getElementById("webamp")?.firstElementChild?.firstElementChild
+      ?.firstElementChild;
+
+  if (!centeringLayer) {
+    return;
+  }
+
+  centeringLayer.style.transform = "translate(0px, 0px)";
+}
+
 function getPlayerBounds() {
   const playerRoot = document.getElementById("webamp");
 
   if (!playerRoot) {
     return null;
   }
+
+  pinWebampToTopLeft();
 
   const candidateRects = getVisibleRects(playerRoot);
 
