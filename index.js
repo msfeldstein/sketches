@@ -1,18 +1,21 @@
 const path = require("path");
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
 
-const WINDOW_WIDTH = 1280;
-const WINDOW_HEIGHT = 960;
+const WINDOW_WIDTH = 760;
+const WINDOW_HEIGHT = 860;
+const MIN_CONTENT_WIDTH = 560;
+const MIN_CONTENT_HEIGHT = 640;
 
 function createMainWindow() {
   const mainWindow = new BrowserWindow({
+    useContentSize: true,
     width: WINDOW_WIDTH,
     height: WINDOW_HEIGHT,
-    minWidth: 960,
-    minHeight: 720,
-    backgroundColor: "#10131a",
+    minWidth: MIN_CONTENT_WIDTH,
+    minHeight: MIN_CONTENT_HEIGHT,
+    backgroundColor: "#050505",
     autoHideMenuBar: true,
-    title: "Webamp Desktop",
+    title: "Webamp",
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -24,6 +27,8 @@ function createMainWindow() {
   mainWindow.webContents.setWindowOpenHandler(() => ({
     action: "deny",
   }));
+
+  return mainWindow;
 }
 
 app.whenReady().then(() => {
@@ -34,6 +39,25 @@ app.whenReady().then(() => {
       createMainWindow();
     }
   });
+});
+
+ipcMain.handle("resize-to-player", (event, { width, height }) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+
+  if (!window) {
+    return null;
+  }
+
+  window.setContentSize(
+    Math.max(MIN_CONTENT_WIDTH, Math.ceil(width)),
+    Math.max(MIN_CONTENT_HEIGHT, Math.ceil(height)),
+    true
+  );
+
+  return {
+    width,
+    height,
+  };
 });
 
 app.on("window-all-closed", () => {

@@ -1,112 +1,76 @@
+const { ipcRenderer } = require("electron");
 const WebampModule = require("webamp");
 
 const Webamp = WebampModule.default || WebampModule;
-
-const statusMessage = document.getElementById("status-message");
-const replaceButton = document.getElementById("replace-button");
-const appendButton = document.getElementById("append-button");
-const replaceInput = document.getElementById("replace-input");
-const appendInput = document.getElementById("append-input");
 const host = document.getElementById("webamp-host");
 
-const supportedAudioExtensions = /\.(aac|aiff?|alac|flac|m4a|mp3|ogg|opus|wav|webm)$/i;
+const WINDOW_PADDING = 12;
 
 const webamp = new Webamp({
   enableHotkeys: true,
+  enableDoubleSizeMode: true,
 });
 
-let playerReady = false;
-let hasLoadedTracks = false;
+function getPlayerBounds() {
+  const playerRoot = document.getElementById("webamp");
 
-function setStatus(message, tone = "info") {
-  statusMessage.textContent = message;
-  statusMessage.dataset.tone = tone;
-}
+  if (!playerRoot) {
+    return null;
+  }
 
-function setButtonsDisabled(disabled) {
-  replaceButton.disabled = disabled;
-  appendButton.disabled = disabled;
-}
+  const candidateRects = Array.from(playerRoot.querySelectorAll("*"))
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
 
-function toTrack(file) {
+  if (candidateRects.length === 0) {
+    const rect = playerRoot.getBoundingClientRect();
+
+    if (rect.width === 0 || rect.height === 0) {
+      return null;
+    }
+
+    return {
+      width: rect.width,
+      height: rect.height,
+    };
+  }
+
+  const left = Math.min(...candidateRects.map((rect) => rect.left));
+  const top = Math.min(...candidateRects.map((rect) => rect.top));
+  const right = Math.max(...candidateRects.map((rect) => rect.right));
+  const bottom = Math.max(...candidateRects.map((rect) => rect.bottom));
+
   return {
-    blob: file,
-    defaultName: file.name.replace(/\.[^.]+$/, "") || file.name,
+    width: right - left,
+    height: bottom - top,
   };
 }
 
-function getAudioFiles(fileList) {
-  return Array.from(fileList).filter((file) => {
-    return file.type.startsWith("audio/") || supportedAudioExtensions.test(file.name);
-  });
-}
+async function fitWindowToPlayer() {
+  const bounds = getPlayerBounds();
 
-async function importFiles(fileList, mode) {
-  if (!playerReady) {
-    setStatus("Webamp is still starting. Try again in a moment.", "warning");
+  if (!bounds) {
     return;
   }
 
-  const files = getAudioFiles(fileList);
-
-  if (files.length === 0) {
-    setStatus("No supported audio files were selected.", "warning");
-    return;
-  }
-
-  const tracks = files.map(toTrack);
-  const action = mode === "append" && hasLoadedTracks ? "append" : "replace";
-
-  try {
-    if (action === "append") {
-      await webamp.appendTracks(tracks);
-      setStatus(`Queued ${tracks.length} more track${tracks.length === 1 ? "" : "s"}.`, "success");
-    } else {
-      await webamp.setTracksToPlay(tracks);
-      hasLoadedTracks = true;
-      setStatus(`Loaded ${tracks.length} track${tracks.length === 1 ? "" : "s"} into Webamp.`, "success");
-      return;
-    }
-
-    hasLoadedTracks = true;
-  } catch (error) {
-    console.error("Unable to import tracks into Webamp", error);
-    setStatus("Webamp could not load those files. Check the terminal for details.", "error");
-  }
-}
-
-function bindFilePicker(button, input, mode) {
-  button.addEventListener("click", () => {
-    input.click();
-  });
-
-  input.addEventListener("change", async (event) => {
-    const { files } = event.target;
-
-    if (!files || files.length === 0) {
-      return;
-    }
-
-    await importFiles(files, mode);
-    input.value = "";
+  await ipcRenderer.invoke("resize-to-player", {
+    width: Math.ceil(bounds.width + WINDOW_PADDING * 2),
+    height: Math.ceil(bounds.height + WINDOW_PADDING * 2),
   });
 }
 
 async function boot() {
-  setButtonsDisabled(true);
-  setStatus("Starting Webamp…");
-
   try {
     await webamp.renderWhenReady(host);
-    playerReady = true;
-    setButtonsDisabled(false);
-    setStatus("Webamp is ready. Open songs from the desktop VM to start listening.", "success");
+    await fitWindowToPlayer();
+    window.setTimeout(() => {
+      fitWindowToPlayer().catch((error) => {
+        console.error("Unable to resize the Webamp window", error);
+      });
+    }, 250);
   } catch (error) {
     console.error("Unable to render Webamp", error);
-    setStatus("Webamp failed to render. Check the terminal for details.", "error");
   }
 }
 
-bindFilePicker(replaceButton, replaceInput, "replace");
-bindFilePicker(appendButton, appendInput, "append");
 boot();
