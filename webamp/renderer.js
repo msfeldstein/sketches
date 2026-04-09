@@ -72,6 +72,22 @@ function getVisibleRects(playerRoot) {
     .map(({ rect }) => rect);
 }
 
+function updateDragStrip() {
+  const dragStrip = document.getElementById("shell-drag-strip");
+  const mainWindow = document.getElementById("main-window");
+
+  if (!dragStrip || !mainWindow) {
+    return;
+  }
+
+  const mainRect = mainWindow.getBoundingClientRect();
+
+  dragStrip.style.left = `${Math.max(0, Math.floor(mainRect.left))}px`;
+  dragStrip.style.top = "0px";
+  dragStrip.style.width = `${Math.ceil(mainRect.width)}px`;
+  dragStrip.style.height = `${DRAG_STRIP_HEIGHT}px`;
+}
+
 function pinWebampToTopLeft() {
   const centeringLayer =
     document.getElementById("webamp")?.firstElementChild?.firstElementChild
@@ -92,6 +108,7 @@ function getPlayerBounds() {
   }
 
   pinWebampToTopLeft();
+  updateDragStrip();
 
   const candidateRects = getVisibleRects(playerRoot);
 
