@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  background: transparent;
+  background: #050505;
 }
 
 * {
@@ -13,19 +13,16 @@ body {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: transparent;
+  background: #050505;
 }
 
 body {
-  padding: 6px;
   user-select: none;
-  -webkit-app-region: drag;
 }
 
 .webamp-host {
   position: relative;
-  width: calc(100vw - 12px);
-  height: calc(100vh - 12px);
+  width: 100vw;
+  height: 100vh;
   overflow: hidden;
-  -webkit-app-region: no-drag;
 }

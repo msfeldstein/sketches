@@ -2,7 +2,7 @@ const { ipcRenderer } = window.require("electron");
 
 const host = document.getElementById("webamp-host");
 
-const WINDOW_PADDING = 6;
+const WINDOW_PADDING = 0;
 const FIT_DEBOUNCE_MS = 80;
 const LAYOUT_POLL_MS = 400;
 
@@ -90,8 +90,8 @@ function getPlayerBounds() {
   const bottom = Math.max(...candidateRects.map((rect) => rect.bottom));
 
   return {
-    width: right - left,
-    height: bottom - top,
+    width: Math.ceil(right - Math.min(left, 0)),
+    height: Math.ceil(bottom - Math.min(top, 0)),
   };
 }
 
