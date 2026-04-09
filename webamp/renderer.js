@@ -124,6 +124,9 @@ async function fitWindowToPlayer() {
 
   lastRequestedSize = requestedSize;
 
+  host.style.width = `${requestedSize.width}px`;
+  host.style.height = `${requestedSize.height}px`;
+
   await ipcRenderer.invoke("resize-to-player", requestedSize);
 }
 
