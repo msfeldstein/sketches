@@ -5,6 +5,7 @@ const host = document.getElementById("webamp-host");
 const WINDOW_PADDING = 0;
 const FIT_DEBOUNCE_MS = 80;
 const LAYOUT_POLL_MS = 400;
+const DRAG_STRIP_HEIGHT = 18;
 
 let fitTimer = null;
 let lastRequestedSize = null;
@@ -80,7 +81,7 @@ function pinWebampToTopLeft() {
     return;
   }
 
-  centeringLayer.style.transform = "translate(0px, 0px)";
+  centeringLayer.style.transform = `translate(0px, ${DRAG_STRIP_HEIGHT}px)`;
 }
 
 function getPlayerBounds() {
@@ -184,12 +185,24 @@ function observeLayout() {
   }, LAYOUT_POLL_MS);
 }
 
+function ensureDragStrip() {
+  if (document.getElementById("shell-drag-strip")) {
+    return;
+  }
+
+  const dragStrip = document.createElement("div");
+  dragStrip.id = "shell-drag-strip";
+  dragStrip.setAttribute("aria-hidden", "true");
+  document.body.appendChild(dragStrip);
+}
+
 async function boot() {
   try {
     const Webamp = await loadWebamp();
     const webamp = createWebamp(Webamp);
 
     await webamp.renderWhenReady(host);
+    ensureDragStrip();
     observeLayout();
     await fitWindowToPlayer();
     window.setTimeout(() => {

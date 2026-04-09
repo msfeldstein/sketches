@@ -26,3 +26,11 @@ body {
   height: 100vh;
   overflow: hidden;
 }
+
+#shell-drag-strip {
+  position: fixed;
+  z-index: 2147483647;
+  background: transparent;
+  -webkit-app-region: drag;
+  pointer-events: auto;
+}
