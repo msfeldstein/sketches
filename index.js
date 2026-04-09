@@ -8,6 +8,7 @@ app.commandLine.appendSwitch("use-angle", "swiftshader-webgl");
 app.commandLine.appendSwitch("enable-unsafe-swiftshader");
 
 let mainWindow = null;
+let ignoringMouseEvents = false;
 
 function createMainWindow() {
   const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
@@ -72,7 +73,12 @@ ipcMain.on("set-ignore-mouse-events", (_event, ignore) => {
     return;
   }
 
-  mainWindow.setIgnoreMouseEvents(Boolean(ignore));
+  ignoringMouseEvents = Boolean(ignore);
+  mainWindow.setIgnoreMouseEvents(ignoringMouseEvents, { forward: true });
+});
+
+ipcMain.handle("get-ignore-mouse-events-state", () => {
+  return ignoringMouseEvents;
 });
 
 ipcMain.on("minimize-shell", () => {
