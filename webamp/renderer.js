@@ -2,15 +2,12 @@ const { ipcRenderer } = window.require("electron");
 
 const host = document.getElementById("webamp-host");
 
-const WINDOW_PADDING = 0;
-const FIT_DEBOUNCE_MS = 80;
-const LAYOUT_POLL_MS = 400;
-const DRAG_STRIP_HEIGHT = 18;
+const INTERACTION_POLL_MS = 120;
+const DESKTOP_OFFSET_X = 32;
+const DESKTOP_OFFSET_Y = 32;
 
-let fitTimer = null;
-let lastRequestedSize = null;
-let lastHadBounds = false;
-let shellDragActive = false;
+let ignoreMouseEvents = false;
+let interactionIntervalId = null;
 
 async function loadWebamp() {
   const WebampModule = await import(
@@ -30,11 +27,11 @@ function createWebamp(Webamp) {
       },
       equalizer: {
         position: { top: 0, left: 0 },
-        closed: true,
+        closed: false,
       },
       playlist: {
-        position: { top: 0, left: 0 },
-        closed: true,
+        position: { top: 232, left: 0 },
+        closed: false,
       },
       milkdrop: {
         position: { top: 0, left: 550 },
@@ -48,48 +45,7 @@ function createWebamp(Webamp) {
   });
 }
 
-function getVisibleRects(playerRoot) {
-  const elements = [playerRoot, ...playerRoot.querySelectorAll("*")];
-
-  return elements
-    .map((element) => {
-      const rect = element.getBoundingClientRect();
-      const computedStyle = window.getComputedStyle(element);
-
-      return {
-        rect,
-        computedStyle,
-      };
-    })
-    .filter(({ rect, computedStyle }) => {
-      return (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        computedStyle.display !== "none" &&
-        computedStyle.visibility !== "hidden" &&
-        computedStyle.opacity !== "0"
-      );
-    })
-    .map(({ rect }) => rect);
-}
-
-function updateDragStrip() {
-  const dragStrip = document.getElementById("shell-drag-strip");
-  const mainWindow = document.getElementById("main-window");
-
-  if (!dragStrip || !mainWindow) {
-    return;
-  }
-
-  const mainRect = mainWindow.getBoundingClientRect();
-
-  dragStrip.style.left = `${Math.max(0, Math.floor(mainRect.left))}px`;
-  dragStrip.style.top = "0px";
-  dragStrip.style.width = `${Math.ceil(mainRect.width)}px`;
-  dragStrip.style.height = `${DRAG_STRIP_HEIGHT}px`;
-}
-
-function pinWebampToTopLeft() {
+function pinWebampCluster() {
   const centeringLayer =
     document.getElementById("webamp")?.firstElementChild?.firstElementChild
       ?.firstElementChild;
@@ -98,165 +54,95 @@ function pinWebampToTopLeft() {
     return;
   }
 
-  centeringLayer.style.transform = `translate(0px, ${DRAG_STRIP_HEIGHT}px)`;
+  centeringLayer.style.transform = `translate(${DESKTOP_OFFSET_X}px, ${DESKTOP_OFFSET_Y}px)`;
 }
 
-function getPlayerBounds() {
-  const playerRoot = document.getElementById("webamp");
+function getInteractiveRects() {
+  const selectors = ["#webamp .window", "#webamp-context-menu", ".context-menu"];
+  const interactiveElements = document.querySelectorAll(selectors.join(", "));
 
-  if (!playerRoot) {
-    return null;
-  }
+  return Array.from(interactiveElements)
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
 
-  pinWebampToTopLeft();
-  updateDragStrip();
-
-  const candidateRects = getVisibleRects(playerRoot);
-
-  if (candidateRects.length === 0) {
-    return null;
-  }
-
-  const left = Math.min(...candidateRects.map((rect) => rect.left));
-  const top = Math.min(...candidateRects.map((rect) => rect.top));
-  const right = Math.max(...candidateRects.map((rect) => rect.right));
-  const bottom = Math.max(...candidateRects.map((rect) => rect.bottom));
-
-  return {
-    width: Math.ceil(right - Math.min(left, 0)),
-    height: Math.ceil(bottom - Math.min(top, 0)),
-  };
+      return {
+        rect,
+        style,
+      };
+    })
+    .filter(({ rect, style }) => {
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0"
+      );
+    })
+    .map(({ rect }) => rect);
 }
 
-async function fitWindowToPlayer() {
-  const bounds = getPlayerBounds();
+async function syncMousePassthrough() {
+  const windowBounds = await ipcRenderer.invoke("get-bounds");
 
-  if (!bounds) {
-    if (lastHadBounds) {
-      ipcRenderer.send("close-shell");
-    }
-
-    lastHadBounds = false;
+  if (!windowBounds) {
     return;
   }
 
-  lastHadBounds = true;
+  const cursorPoint = await ipcRenderer.invoke("get-cursor-screen-point");
+  const cursorWithinWindow =
+    cursorPoint.x >= windowBounds.x &&
+    cursorPoint.x <= windowBounds.x + windowBounds.width &&
+    cursorPoint.y >= windowBounds.y &&
+    cursorPoint.y <= windowBounds.y + windowBounds.height;
 
-  const requestedSize = {
-    width: Math.ceil(bounds.width + WINDOW_PADDING * 2),
-    height: Math.ceil(bounds.height + WINDOW_PADDING * 2),
-  };
-
-  if (
-    lastRequestedSize &&
-    lastRequestedSize.width === requestedSize.width &&
-    lastRequestedSize.height === requestedSize.height
-  ) {
+  if (!cursorWithinWindow) {
     return;
   }
 
-  lastRequestedSize = requestedSize;
-
-  host.style.width = `${requestedSize.width}px`;
-  host.style.height = `${requestedSize.height}px`;
-
-  await ipcRenderer.invoke("resize-to-player", requestedSize);
-}
-
-function scheduleFit() {
-  window.clearTimeout(fitTimer);
-  fitTimer = window.setTimeout(() => {
-    fitWindowToPlayer().catch((error) => {
-      console.error("Unable to resize the Webamp shell", error);
-    });
-  }, FIT_DEBOUNCE_MS);
-}
-
-function observeLayout() {
-  const playerRoot = document.getElementById("webamp");
-
-  if (!playerRoot) {
-    return;
-  }
-
-  const mutationObserver = new MutationObserver(() => {
-    scheduleFit();
-  });
-
-  mutationObserver.observe(playerRoot, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["style", "class"],
-  });
-
-  const resizeObserver = new ResizeObserver(() => {
-    scheduleFit();
-  });
-
-  resizeObserver.observe(playerRoot);
-  resizeObserver.observe(document.body);
-
-  window.addEventListener("resize", scheduleFit);
-  window.setInterval(() => {
-    scheduleFit();
-  }, LAYOUT_POLL_MS);
-}
-
-function ensureDragStrip() {
-  if (document.getElementById("shell-drag-strip")) {
-    return;
-  }
-
-  const dragStrip = document.createElement("div");
-  dragStrip.id = "shell-drag-strip";
-  dragStrip.setAttribute("aria-hidden", "true");
-  document.body.appendChild(dragStrip);
-}
-
-function setupShellDragging() {
-  const dragStrip = document.getElementById("shell-drag-strip");
-
-  if (!dragStrip) {
-    return;
-  }
-
-  dragStrip.addEventListener("mousedown", (event) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    shellDragActive = true;
-    ipcRenderer.send("begin-shell-drag", {
-      screenX: event.screenX,
-      screenY: event.screenY,
-    });
-    event.preventDefault();
-  });
-
-  window.addEventListener("mousemove", (event) => {
-    if (!shellDragActive) {
-      return;
-    }
-
-    ipcRenderer.send("update-shell-drag", {
-      screenX: event.screenX,
-      screenY: event.screenY,
-    });
-  });
-
-  const endDrag = () => {
-    if (!shellDragActive) {
-      return;
-    }
-
-    shellDragActive = false;
-    ipcRenderer.send("end-shell-drag");
+  const localPoint = {
+    x: cursorPoint.x - windowBounds.x,
+    y: cursorPoint.y - windowBounds.y,
   };
 
-  window.addEventListener("mouseup", endDrag);
-  window.addEventListener("mouseleave", endDrag);
-  window.addEventListener("blur", endDrag);
+  const overInteractiveRegion = getInteractiveRects().some((rect) => {
+    return (
+      localPoint.x >= rect.left &&
+      localPoint.x <= rect.right &&
+      localPoint.y >= rect.top &&
+      localPoint.y <= rect.bottom
+    );
+  });
+
+  if (overInteractiveRegion && ignoreMouseEvents) {
+    ipcRenderer.send("set-ignore-mouse-events", false);
+    ignoreMouseEvents = false;
+  } else if (!overInteractiveRegion && !ignoreMouseEvents) {
+    ipcRenderer.send("set-ignore-mouse-events", true);
+    ignoreMouseEvents = true;
+  }
+}
+
+function startDesktopOverlayInteractionLoop() {
+  window.clearInterval(interactionIntervalId);
+  interactionIntervalId = window.setInterval(() => {
+    syncMousePassthrough().catch((error) => {
+      console.error("Unable to update desktop overlay interaction mask", error);
+    });
+  }, INTERACTION_POLL_MS);
+}
+
+function setupShellLifecycle(webamp) {
+  const unsubscribeOnMinimize = webamp.onMinimize(() => {
+    ipcRenderer.send("minimize-shell");
+  });
+
+  const unsubscribeOnClose = webamp.onClose(() => {
+    ipcRenderer.send("close-shell");
+    unsubscribeOnMinimize();
+    unsubscribeOnClose();
+  });
 }
 
 async function boot() {
@@ -265,15 +151,12 @@ async function boot() {
     const webamp = createWebamp(Webamp);
 
     await webamp.renderWhenReady(host);
-    ensureDragStrip();
-    setupShellDragging();
-    observeLayout();
-    await fitWindowToPlayer();
-    window.setTimeout(() => {
-      scheduleFit();
-    }, 250);
+    pinWebampCluster();
+    setupShellLifecycle(webamp);
+    startDesktopOverlayInteractionLoop();
+    await syncMousePassthrough();
   } catch (error) {
-    console.error("Unable to render Butterchurn-enabled Webamp", error);
+    console.error("Unable to render desktop-overlay Webamp", error);
   }
 }
 

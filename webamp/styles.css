@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  background: #050505;
+  background: transparent;
 }
 
 * {
@@ -13,7 +13,7 @@ body {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #050505;
+  background: transparent;
 }
 
 body {
@@ -25,12 +25,4 @@ body {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-}
-
-#shell-drag-strip {
-  position: fixed;
-  z-index: 2147483647;
-  background: transparent;
-  pointer-events: auto;
-  cursor: grab;
 }
