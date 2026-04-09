@@ -1,4 +1,5 @@
 const path = require("path");
+const { execFileSync } = require("child_process");
 const { app, BrowserWindow, ipcMain, screen } = require("electron");
 
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
@@ -65,6 +66,27 @@ ipcMain.handle("get-bounds", () => {
 });
 
 ipcMain.handle("get-cursor-screen-point", () => {
+  if (process.platform === "linux") {
+    try {
+      const output = execFileSync("xdotool", ["getmouselocation", "--shell"], {
+        encoding: "utf8",
+      });
+      const values = Object.fromEntries(
+        output
+          .trim()
+          .split("\n")
+          .map((line) => line.split("="))
+      );
+
+      return {
+        x: Number(values.X),
+        y: Number(values.Y),
+      };
+    } catch (_error) {
+      // Fall back to Electron's cursor API if xdotool is unavailable.
+    }
+  }
+
   return screen.getCursorScreenPoint();
 });
 
