@@ -47,6 +47,8 @@ function createMainWindow() {
   return mainWindow;
 }
 
+const dragSessions = new WeakMap();
+
 app.whenReady().then(() => {
   createMainWindow();
 
@@ -81,6 +83,43 @@ ipcMain.on("close-shell", (event) => {
 
   if (window) {
     window.close();
+  }
+});
+
+ipcMain.on("begin-shell-drag", (event, { screenX, screenY }) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+
+  if (!window) {
+    return;
+  }
+
+  const [x, y] = window.getPosition();
+
+  dragSessions.set(window, {
+    offsetX: Math.round(screenX - x),
+    offsetY: Math.round(screenY - y),
+  });
+});
+
+ipcMain.on("update-shell-drag", (event, { screenX, screenY }) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const dragSession = window ? dragSessions.get(window) : null;
+
+  if (!window || !dragSession) {
+    return;
+  }
+
+  window.setPosition(
+    Math.round(screenX - dragSession.offsetX),
+    Math.round(screenY - dragSession.offsetY)
+  );
+});
+
+ipcMain.on("end-shell-drag", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+
+  if (window) {
+    dragSessions.delete(window);
   }
 });
 

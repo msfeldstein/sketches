@@ -31,6 +31,6 @@ body {
   position: fixed;
   z-index: 2147483647;
   background: transparent;
-  -webkit-app-region: drag;
   pointer-events: auto;
+  cursor: grab;
 }

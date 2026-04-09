@@ -10,6 +10,7 @@ const DRAG_STRIP_HEIGHT = 18;
 let fitTimer = null;
 let lastRequestedSize = null;
 let lastHadBounds = false;
+let shellDragActive = false;
 
 async function loadWebamp() {
   const WebampModule = await import(
@@ -213,6 +214,51 @@ function ensureDragStrip() {
   document.body.appendChild(dragStrip);
 }
 
+function setupShellDragging() {
+  const dragStrip = document.getElementById("shell-drag-strip");
+
+  if (!dragStrip) {
+    return;
+  }
+
+  dragStrip.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    shellDragActive = true;
+    ipcRenderer.send("begin-shell-drag", {
+      screenX: event.screenX,
+      screenY: event.screenY,
+    });
+    event.preventDefault();
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!shellDragActive) {
+      return;
+    }
+
+    ipcRenderer.send("update-shell-drag", {
+      screenX: event.screenX,
+      screenY: event.screenY,
+    });
+  });
+
+  const endDrag = () => {
+    if (!shellDragActive) {
+      return;
+    }
+
+    shellDragActive = false;
+    ipcRenderer.send("end-shell-drag");
+  };
+
+  window.addEventListener("mouseup", endDrag);
+  window.addEventListener("mouseleave", endDrag);
+  window.addEventListener("blur", endDrag);
+}
+
 async function boot() {
   try {
     const Webamp = await loadWebamp();
@@ -220,6 +266,7 @@ async function boot() {
 
     await webamp.renderWhenReady(host);
     ensureDragStrip();
+    setupShellDragging();
     observeLayout();
     await fitWindowToPlayer();
     window.setTimeout(() => {
