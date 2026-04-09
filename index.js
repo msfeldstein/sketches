@@ -6,6 +6,12 @@ const WINDOW_HEIGHT = 680;
 const MIN_CONTENT_WIDTH = 320;
 const MIN_CONTENT_HEIGHT = 240;
 
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
+app.commandLine.appendSwitch("enable-webgl");
+app.commandLine.appendSwitch("use-gl", "angle");
+app.commandLine.appendSwitch("use-angle", "swiftshader-webgl");
+app.commandLine.appendSwitch("enable-unsafe-swiftshader");
+
 function createMainWindow() {
   const mainWindow = new BrowserWindow({
     show: false,
@@ -14,17 +20,17 @@ function createMainWindow() {
     height: WINDOW_HEIGHT,
     minWidth: MIN_CONTENT_WIDTH,
     minHeight: MIN_CONTENT_HEIGHT,
-    backgroundColor: "#00000000",
+    backgroundColor: "#050505",
     autoHideMenuBar: true,
     title: "Webamp",
     frame: false,
-    transparent: true,
     hasShadow: false,
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
     resizable: false,
     webPreferences: {
+      webgl: true,
       nodeIntegration: true,
       contextIsolation: false,
     },
