@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Webamp Desktop</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="toolbar">
+        <div class="toolbar__copy">
+          <p class="eyebrow">Electron wrapper</p>
+          <h1>Webamp Desktop</h1>
+          <p class="toolbar__description">
+            Load music from the desktop VM and control it with a classic Winamp
+            interface.
+          </p>
+        </div>
+
+        <div class="toolbar__actions">
+          <button id="replace-button" class="action-button" type="button">
+            Open songs
+          </button>
+          <button id="append-button" class="action-button" type="button">
+            Add to playlist
+          </button>
+          <input
+            id="replace-input"
+            type="file"
+            accept="audio/*"
+            multiple
+            hidden
+          />
+          <input
+            id="append-input"
+            type="file"
+            accept="audio/*"
+            multiple
+            hidden
+          />
+        </div>
+      </header>
+
+      <section class="status-panel" aria-live="polite">
+        <p id="status-message" class="status-panel__message">
+          Starting Webamp…
+        </p>
+        <p class="status-panel__hint">
+          Tip: use <strong>Open songs</strong> to replace the playlist, or
+          <strong>Add to playlist</strong> to queue more files.
+        </p>
+      </section>
+
+      <main id="webamp-host" class="webamp-host"></main>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

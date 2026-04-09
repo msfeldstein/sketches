@@ -1,0 +1,158 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background:
+    radial-gradient(circle at top, #25324d 0%, #151922 45%, #0a0d14 100%);
+  color: #f4f7ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100%;
+  padding: 24px;
+  gap: 16px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+  padding: 20px 22px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(10, 13, 20, 0.76);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.toolbar__copy {
+  max-width: 720px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #91a9ff;
+}
+
+.toolbar h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 2.2vw, 2.6rem);
+}
+
+.toolbar__description {
+  margin: 10px 0 0;
+  color: #c8d2ef;
+  line-height: 1.55;
+}
+
+.toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.action-button {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #8da0ff 0%, #5468d9 100%);
+  color: #ffffff;
+  padding: 12px 18px;
+  font-size: 0.98rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    opacity 120ms ease;
+  box-shadow: 0 10px 20px rgba(84, 104, 217, 0.28);
+}
+
+.action-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px rgba(84, 104, 217, 0.32);
+}
+
+.action-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+  box-shadow: none;
+}
+
+.status-panel {
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(11, 17, 29, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.status-panel__message {
+  margin: 0;
+  font-weight: 700;
+}
+
+.status-panel__message[data-tone="success"] {
+  color: #9cf7b8;
+}
+
+.status-panel__message[data-tone="warning"] {
+  color: #ffd684;
+}
+
+.status-panel__message[data-tone="error"] {
+  color: #ff9da5;
+}
+
+.status-panel__hint {
+  margin: 6px 0 0;
+  color: #bcc8e9;
+  line-height: 1.45;
+}
+
+.webamp-host {
+  position: relative;
+  flex: 1;
+  min-height: 520px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at center, rgba(92, 110, 205, 0.18), transparent 50%),
+    rgba(7, 10, 17, 0.78);
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    padding: 16px;
+  }
+
+  .toolbar {
+    flex-direction: column;
+  }
+
+  .toolbar__actions {
+    justify-content: flex-start;
+  }
+}
