@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Pineapple Portal Golf</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍍</text></svg>" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div class="score p1">
+      <span class="dot"></span>
+      <span class="name">PINK</span>
+      <span class="pips" id="pips1"></span>
+    </div>
+    <div id="centerInfo">
+      <div id="turnPill">&nbsp;</div>
+      <div id="hudButtons">
+        <button id="btnNewBoard" class="mini">New board</button>
+        <button id="btnMenu" class="mini">Menu</button>
+      </div>
+    </div>
+    <div class="score p2">
+      <span class="pips" id="pips2"></span>
+      <span class="name">CYAN</span>
+      <span class="dot"></span>
+    </div>
+  </div>
+
+  <div id="stage"><canvas id="game"></canvas></div>
+
+  <div id="menu" class="overlay">
+    <div class="panel">
+      <h1>Pineapple Portal Golf</h1>
+      <p class="tagline">Flick your balls across the board. Holes teleport to their sibling hole &mdash; unless a ball is plugging it. First to sink <b>3 balls</b> in the 🍍 target hole wins!</p>
+
+      <div class="setting">
+        <span class="label">Mode</span>
+        <div class="seg" id="segMode">
+          <button data-value="turn" class="active">Turn&#8209;based</button>
+          <button data-value="chaos">Chaos</button>
+        </div>
+      </div>
+      <p class="hint" id="modeHint">Take turns, one flick each.</p>
+
+      <div class="setting">
+        <span class="label">Portals</span>
+        <div class="seg" id="segPortals">
+          <button data-value="shown" class="active">Revealed</button>
+          <button data-value="hidden">Mystery</button>
+        </div>
+      </div>
+      <p class="hint" id="portalHint">Sibling holes are colour&#8209;matched and linked.</p>
+
+      <button id="btnStart" class="big">Play</button>
+      <p class="howto">Touch one of your balls and swipe up / down / left / right to throw it.</p>
+    </div>
+  </div>
+
+  <div id="winOverlay" class="overlay hidden">
+    <div class="panel">
+      <h1 id="winTitle">Pink wins!</h1>
+      <p class="tagline" id="winSub">3 balls in the pineapple hole 🍍</p>
+      <button id="btnRematch" class="big">Rematch</button>
+      <button id="btnWinMenu" class="mini">Back to menu</button>
+    </div>
+  </div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
