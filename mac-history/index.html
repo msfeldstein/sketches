@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mac — Every generation</title>
+<style>
+  :root {
+    --text: #1d1d1f;
+    --text-secondary: #6e6e73;
+    --link: #0066cc;
+    --page-bg: #ffffff;
+    --section-bg: #f5f5f7;
+    --card-bg: #ffffff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont,
+      "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: var(--page-bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ---------- local nav ---------- */
+  .localnav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(255,255,255,0.72);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid rgba(0,0,0,0.10);
+  }
+  .localnav-inner {
+    max-width: 980px; margin: 0 auto; padding: 0 22px;
+    height: 52px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .localnav-title { font-size: 21px; font-weight: 600; color: var(--text); }
+  .localnav-title:hover { text-decoration: none; }
+  .localnav-menu { display: flex; gap: 24px; align-items: center; }
+  .localnav-menu a { font-size: 12px; color: var(--text); opacity: .88; }
+
+  /* ---------- page heading ---------- */
+  .page-head { max-width: 980px; margin: 0 auto; padding: 50px 22px 8px; }
+  .page-head h1 { font-size: 56px; font-weight: 600; letter-spacing: -0.005em; }
+
+  /* ---------- chapter nav (product ribbon) ---------- */
+  .chapternav-wrap { position: relative; max-width: 1240px; margin: 0 auto; }
+  .chapternav {
+    overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
+    padding: 26px 34px 30px;
+  }
+  .chapternav::-webkit-scrollbar { display: none; }
+  .chapternav ul {
+    display: flex; gap: 6px; list-style: none; width: max-content; margin: 0 auto;
+  }
+  .chapternav li { flex: 0 0 auto; }
+  .chapternav a {
+    display: flex; flex-direction: column; align-items: center;
+    width: 98px; padding: 4px 6px; color: var(--text);
+  }
+  .chapternav a:hover { text-decoration: none; color: var(--link); }
+  .chapternav .icon {
+    height: 64px; width: 86px; display: flex; align-items: flex-end; justify-content: center;
+    margin-bottom: 9px;
+  }
+  .chapternav .icon img {
+    max-height: 64px; max-width: 86px; object-fit: contain; display: block;
+  }
+  .chapternav .icon.round img { border-radius: 10px; }
+  .chapternav .label { font-size: 12px; font-weight: 500; line-height: 1.2; text-align: center; }
+  .chapternav .year { font-size: 10.5px; color: var(--text-secondary); margin-top: 2px; }
+  .paddle {
+    position: absolute; top: 0; bottom: 0; width: 56px; border: 0; cursor: pointer;
+    display: flex; align-items: center; z-index: 5; background: transparent; color: #86868b;
+    font-size: 26px; padding: 0;
+  }
+  .paddle:hover { color: var(--text); }
+  .paddle.left  { left: 0;  justify-content: flex-start; padding-left: 10px;
+    background: linear-gradient(to right, #fff 42%, rgba(255,255,255,0)); }
+  .paddle.right { right: 0; justify-content: flex-end; padding-right: 10px;
+    background: linear-gradient(to left, #fff 42%, rgba(255,255,255,0)); }
+  .paddle[hidden] { display: none; }
+
+  /* ---------- hero ---------- */
+  .hero { background: var(--section-bg); text-align: center; padding: 84px 22px 72px; }
+  .hero h2 { font-size: 48px; font-weight: 600; letter-spacing: -0.003em; }
+  .hero h2 .grad {
+    background: linear-gradient(90deg, #0090f7, #ba62fc, #f2416b, #f55600);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p { font-size: 21px; color: var(--text-secondary); max-width: 640px; margin: 18px auto 0; line-height: 1.45; }
+
+  /* ---------- eras / lineup ---------- */
+  .era { padding: 70px 0 26px; }
+  .era-inner { max-width: 1240px; margin: 0 auto; padding: 0 22px; }
+  .era h3 { font-size: 32px; font-weight: 600; margin-bottom: 6px; }
+  .era .era-sub { font-size: 17px; color: var(--text-secondary); margin-bottom: 30px; }
+  .grid {
+    display: grid; gap: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  }
+  .card {
+    background: var(--card-bg); border-radius: 18px; overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.06);
+    display: flex; flex-direction: column; color: var(--text);
+    transition: transform .25s ease, box-shadow .25s ease;
+  }
+  .card:hover {
+    text-decoration: none; transform: translateY(-4px) scale(1.01);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 12px 28px rgba(0,0,0,0.12);
+  }
+  .card .photo {
+    height: 190px; display: flex; align-items: center; justify-content: center;
+    background: #fff; padding: 18px;
+  }
+  .card .photo img { max-height: 100%; max-width: 100%; object-fit: contain; }
+  .card.dark .photo { background: #000; padding: 0; }
+  .card.dark .photo img { width: 100%; height: 100%; object-fit: cover; }
+  .card .meta { padding: 18px 20px 20px; border-top: 1px solid rgba(0,0,0,0.05); }
+  .card .name { font-size: 19px; font-weight: 600; }
+  .card .yearchip {
+    display: inline-block; font-size: 11px; font-weight: 600; color: #fff;
+    background: #86868b; border-radius: 20px; padding: 2px 9px; margin-left: 8px;
+    vertical-align: 2px;
+  }
+  .card .tagline { font-size: 14px; color: var(--text-secondary); margin-top: 6px; line-height: 1.4; }
+  .card .cta { font-size: 14px; color: var(--link); margin-top: 12px; display: inline-block; }
+  .card:hover .cta { text-decoration: underline; }
+  .card .archived { display: block; font-size: 11px; color: #a1a1a6; margin-top: 6px; }
+
+  .era.alt { background: var(--section-bg); padding-bottom: 70px; }
+  .era.alt .card { background: #fff; }
+
+  /* ---------- footer ---------- */
+  footer { background: var(--section-bg); border-top: 1px solid #d2d2d7; }
+  .footer-inner {
+    max-width: 980px; margin: 0 auto; padding: 26px 22px 44px;
+    font-size: 12px; color: var(--text-secondary); line-height: 1.5;
+  }
+  .footer-inner p + p { margin-top: 8px; }
+
+  @media (max-width: 734px) {
+    .page-head h1 { font-size: 40px; }
+    .hero h2 { font-size: 32px; }
+    .hero p { font-size: 17px; }
+    .paddle { width: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="localnav">
+  <div class="localnav-inner">
+    <a class="localnav-title" href="#top">Mac</a>
+    <div class="localnav-menu">
+      <a href="#lineup">The timeline</a>
+      <a href="https://web.archive.org/web/sitemap/https://www.apple.com/mac/" target="_blank" rel="noopener">Wayback Machine ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head" id="top">
+  <h1>Mac</h1>
+</header>
+
+<div class="chapternav-wrap">
+  <button class="paddle left" type="button" aria-label="Scroll to newer Macs" hidden>&#8249;</button>
+  <nav class="chapternav" aria-label="All Mac models">
+    <ul id="ribbon"></ul>
+  </nav>
+  <button class="paddle right" type="button" aria-label="Scroll to older Macs">&#8250;</button>
+</div>
+
+<section class="hero">
+  <h2>Every Mac. <span class="grad">Back to 1998.</span></h2>
+  <p>The whole family, as far back as the Wayback Machine remembers.
+     Click any Mac to visit its original marketing page on apple.com,
+     served straight from the Internet Archive.</p>
+</section>
+
+<main id="lineup"></main>
+
+<footer>
+  <div class="footer-inner">
+    <p>A personal sketch, not affiliated with Apple. Product photography comes from Apple&rsquo;s own
+       marketing pages as preserved by the <a href="https://web.archive.org" target="_blank" rel="noopener">Internet Archive Wayback Machine</a>;
+       current-lineup images come from apple.com.</p>
+    <p>Dedicated product pages on apple.com were first captured by the Wayback Machine in spring 1998,
+       so the timeline starts with the original iMac and the PowerBook G3 &mdash; as far back as possible.</p>
+  </div>
+</footer>
+
+<script>
+const WB = (ts, url) => `https://web.archive.org/web/${ts}/${url}`;
+
+const MACS = [
+  // --- current lineup (chapternav icons from apple.com/mac) ---
+  { name: "MacBook Neo",  year: 2026, img: "images/nav_macbook_neo.png",  ts: "20260801164344", url: "https://www.apple.com/macbook-neo/",  era: "now", tagline: "The newest member of the family." },
+  { name: "MacBook Air",  year: 2026, img: "images/nav_macbook_air.png",  ts: "20260801",       url: "https://www.apple.com/macbook-air/",  era: "now", tagline: "Thin. Light. Powerful." },
+  { name: "MacBook Pro",  year: 2026, img: "images/nav_macbook_pro.png",  ts: "20260801164345", url: "https://www.apple.com/macbook-pro/",  era: "now", tagline: "Mind-blowing. Head-turning." },
+  { name: "iMac",         year: 2026, img: "images/nav_imac.png",         ts: "20260801230449", url: "https://www.apple.com/imac/",         era: "now", tagline: "Brilliant, all around." },
+  { name: "Mac mini",     year: 2026, img: "images/nav_mac_mini.png",     ts: "20260801230805", url: "https://www.apple.com/mac-mini/",     era: "now", tagline: "Size down. Power up." },
+  { name: "Mac Studio",   year: 2026, img: "images/nav_mac_studio.png",   ts: "20260801230806", url: "https://www.apple.com/mac-studio/",   era: "now", tagline: "Supercharged for pros." },
+
+  // --- Apple silicon / recent history ---
+  { name: "iMac (24-inch, M1)", year: 2021, img: "images/imac-2021.jpg", ts: "20210421234807", url: "https://www.apple.com/imac/", era: "now", tagline: "Say hello. In seven colors." },
+
+  // --- the Intel years ---
+  { name: "iMac Pro",        year: 2017, img: "images/imac-pro-2017.jpg",     ts: "20171215112624", url: "https://www.apple.com/imac-pro/",     era: "intel", dark: true, tagline: "Power to the pro." },
+  { name: "MacBook",         year: 2015, img: "images/macbook-2015.jpg",      ts: "20150315063054", url: "http://www.apple.com/macbook/",       era: "intel", tagline: "Light. Years ahead." },
+  { name: "Mac Pro",         year: 2013, img: "images/mac-pro-2013.jpg",      ts: "20131223000000", url: "http://www.apple.com/mac-pro/",       era: "intel", dark: true, tagline: "Built for creativity on an epic scale." },
+  { name: "MacBook Air",     year: 2008, img: "images/macbook-air-2008.png",  ts: "20080116135234", url: "http://www.apple.com/macbookair/",    era: "intel", tagline: "The world\u2019s thinnest notebook." },
+  { name: "iMac (aluminum)", year: 2007, img: "images/imac-2007.png",         ts: "20070809051658", url: "http://www.apple.com/imac/",          era: "intel", tagline: "You can\u2019t be too thin. Or too powerful." },
+  { name: "Mac Pro",         year: 2006, img: "images/mac-pro-2006.png",      ts: "20060812162234", url: "http://www.apple.com/macpro/",        era: "intel", tagline: "Quad Xeon. Sixty-four bits." },
+  { name: "MacBook",         year: 2006, img: "images/macbook-2006.png",      ts: "20060529192113", url: "http://www.apple.com/macbook/",       era: "intel", tagline: "Black or white. Intel inside." },
+  { name: "MacBook Pro",     year: 2006, img: "images/macbook-pro-2006.png",  ts: "20060116052925", url: "http://www.apple.com/macbookpro/",    era: "intel", tagline: "The first Intel notebook. 4x faster." },
+
+  // --- the PowerPC era ---
+  { name: "Mac mini",          year: 2005, img: "images/mac-mini-2005.jpg",     ts: "20050116034852", url: "http://www.apple.com/macmini/",       era: "ppc", tagline: "The most affordable Mac ever." },
+  { name: "iMac G5",           year: 2004, img: "images/imac-g5.jpg",           ts: "20040902010157", url: "http://www.apple.com/imac/",          era: "ppc", tagline: "Where did the computer go?" },
+  { name: "iBook G4",          year: 2003, img: "images/ibook-g4.jpg",          ts: "20031202020807", url: "http://www.apple.com/ibook/",         era: "ppc", tagline: "Affordable portable perfection." },
+  { name: "Power Mac G5",      year: 2003, img: "images/power-mac-g5.jpg",      ts: "20030801081952", url: "http://www.apple.com/powermac/",      era: "ppc", tagline: "The world\u2019s fastest personal computer." },
+  { name: "eMac",              year: 2002, img: "images/emac.jpg",              ts: "20030801075416", url: "http://www.apple.com/emac/",          era: "ppc", tagline: "Born for education. Priced for everyone." },
+  { name: "iMac G4",           year: 2002, img: "images/imac-g4.jpg",           ts: "20020204192219", url: "http://www.apple.com/imac/",          era: "ppc", tagline: "The new iMac. Flat-out amazing." },
+  { name: "PowerBook G4",      year: 2001, img: "images/powerbook-g4.jpg",      ts: "20010124062800", url: "http://www.apple.com/powerbook/",     era: "ppc", tagline: "Titanium. One inch thin." },
+  { name: "Power Mac G4 Cube", year: 2000, img: "images/power-mac-g4-cube.jpg", ts: "20001109093500", url: "http://www.apple.com/powermaccube/",  era: "ppc", tagline: "Eight inches of pure power." },
+  { name: "Power Mac G4",      year: 1999, img: "images/power-mac-g4.jpg",      ts: "19991003085843", url: "http://www.apple.com/powermac/",      era: "ppc", tagline: "The first supercomputer on a chip." },
+  { name: "iBook",             year: 1999, img: "images/ibook.jpg",             ts: "19991001173544", url: "http://www.apple.com/ibook/",         era: "ppc", tagline: "iMac to go." },
+  { name: "PowerBook G3",      year: 1998, img: "images/powerbook-g3.jpg",      ts: "19980509040639", url: "http://www.apple.com/powerbook/",     era: "ppc", tagline: "The fastest notebook on the planet." },
+  { name: "iMac G3",           year: 1998, img: "images/imac-g3.jpg",           ts: "19980509042513", url: "http://www.apple.com/imac/",          era: "ppc", tagline: "Hello (again)." },
+];
+
+const ERAS = [
+  { id: "now",   title: "Apple silicon",      sub: "Today\u2019s lineup and the Macs that started the M-series era." },
+  { id: "intel", title: "The Intel years",    sub: "2006\u20132019. Aluminum, unibody, and the thinnest notebooks in the world." },
+  { id: "ppc",   title: "The PowerPC era",    sub: "1998\u20132005. Bondi Blue, Titanium, and the G3, G4 and G5." },
+];
+
+function archivedLabel(ts) {
+  const y = ts.slice(0, 4), m = +ts.slice(4, 6), d = +ts.slice(6, 8);
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `Archived ${months[m - 1]} ${d}, ${y}`;
+}
+
+/* ribbon */
+const ribbon = document.getElementById("ribbon");
+ribbon.innerHTML = MACS.map(mac => `
+  <li>
+    <a href="${WB(mac.ts, mac.url)}" target="_blank" rel="noopener">
+      <span class="icon${mac.dark ? " round" : ""}"><img src="${mac.img}" alt="${mac.name} (${mac.year})"></span>
+      <span class="label">${mac.name}</span>
+      <span class="year">${mac.year === 2026 ? "" : mac.year}</span>
+    </a>
+  </li>`).join("");
+
+/* era sections */
+const main = document.getElementById("lineup");
+main.innerHTML = ERAS.map((era, i) => `
+  <section class="era${i % 2 ? " alt" : ""}">
+    <div class="era-inner">
+      <h3>${era.title}</h3>
+      <p class="era-sub">${era.sub}</p>
+      <div class="grid">
+        ${MACS.filter(m => m.era === era.id).map(mac => `
+          <a class="card${mac.dark ? " dark" : ""}" href="${WB(mac.ts, mac.url)}" target="_blank" rel="noopener">
+            <span class="photo"><img loading="lazy" src="${mac.img}" alt="${mac.name} (${mac.year})"></span>
+            <span class="meta">
+              <span class="name">${mac.name}<span class="yearchip">${mac.year}</span></span>
+              <span class="tagline">${mac.tagline}</span>
+              <span class="cta">View the original page &#8599;</span>
+              <span class="archived">${mac.year === 2026 ? "Live capture" : archivedLabel(mac.ts)}</span>
+            </span>
+          </a>`).join("")}
+      </div>
+    </div>
+  </section>`).join("");
+
+/* ribbon paddles */
+const nav = document.querySelector(".chapternav");
+const left = document.querySelector(".paddle.left");
+const right = document.querySelector(".paddle.right");
+function updatePaddles() {
+  left.hidden = nav.scrollLeft <= 4;
+  right.hidden = nav.scrollLeft >= nav.scrollWidth - nav.clientWidth - 4;
+}
+left.addEventListener("click", () => nav.scrollBy({ left: -nav.clientWidth * 0.8, behavior: "smooth" }));
+right.addEventListener("click", () => nav.scrollBy({ left: nav.clientWidth * 0.8, behavior: "smooth" }));
+nav.addEventListener("scroll", updatePaddles, { passive: true });
+window.addEventListener("resize", updatePaddles);
+updatePaddles();
+</script>
+</body>
+</html>
