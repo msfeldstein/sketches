@@ -47,16 +47,24 @@
   }
 
   // Fast deterministic 2D & 3D integer hashes and 3D time-evolving rotated FBM noise
+  function fract(x) {
+    return x - Math.floor(x);
+  }
+
   function hash2i(x, y) {
     let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263);
     h = Math.imul(h ^ (h >>> 13), 1274126177);
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   }
 
+  // Matches GLSL hash3(vec3) identically so CPU t=0 topology and GPU 3D time-noise align seamlessly
   function hash3i(x, y, z) {
-    let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(z | 0, 1442695041);
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    let px = fract(x * 0.1031);
+    let py = fract(y * 0.1030);
+    let pz = fract(z * 0.0973);
+    const d = px * (py + 33.33) + py * (pz + 33.33) + pz * (px + 33.33);
+    px += d; py += d; pz += d;
+    return fract((px + py) * pz);
   }
 
   function noise3(x, y, z) {
@@ -670,7 +678,7 @@
         float v = 0.5 * noise3(p);
         p = rotOct(p);
         v += 0.25 * noise3(p);
-        return v / 0.75;
+        return v;
       }
 
       float fbm3(vec3 p) {
@@ -679,7 +687,7 @@
         v += 0.25 * noise3(p);
         p = rotOct(p);
         v += 0.125 * noise3(p);
-        return v / 0.875;
+        return v;
       }
 
       float fbm4(vec3 p) {
@@ -690,7 +698,7 @@
         v += 0.125 * noise3(p);
         p = rotOct(p);
         v += 0.0625 * noise3(p);
-        return v / 0.9375;
+        return v;
       }
 
       // 1. Collarette domain-warped wreath & ridge arcade noise across time z
@@ -789,7 +797,7 @@
 
         float dTheta  = clamp((stT.x - st0.x) / 0.14 + 0.5, 0.0, 1.0);
         float dRadial = clamp((stT.y - st0.y) / 0.16 + 0.5, 0.0, 1.0);
-        float tRatio  = clamp((stT.z / st0.z) / 2.4, 0.0, 1.0);
+        float tRatio  = clamp((stT.z / st0.z) / 3.5, 0.0, 1.0);
 
         // 7. High-frequency 3D micro-noise for ruff crenulations, strand micro-wiggle & mist streaks
         float cx = cos(th), sy = sin(th);
@@ -837,7 +845,7 @@
         vec4 nField = texture2D(u_noiseTex, vec2(sAng, uSample));
         float dThetaNoise  = (nField.r - 0.5) * 0.14;
         float dRadialNoise = (nField.g - 0.5) * 0.16;
-        float toneNoiseMul = nField.b * 2.4;
+        float toneNoiseMul = nField.b * 3.5;
         float dMicroNoise  = (nField.a - 0.5);
 
         // Apply 3D noise angular evolution + ultra-slow glacial drift
@@ -1121,6 +1129,7 @@
     }
 
     const startTime = performance.now();
+    const timeOffset = parseFloat(new URLSearchParams(location.search).get('t')) || 0;
     const baseLightAng = Math.atan2(LY, LX);
 
     function renderScene(t) {
@@ -1172,11 +1181,11 @@
     }
 
     function frame(now) {
-      renderScene((now - startTime) * 0.001);
+      renderScene((now - startTime) * 0.001 + timeOffset);
       requestAnimationFrame(frame);
     }
 
-    renderScene(0);
+    renderScene(timeOffset);
     requestAnimationFrame(frame);
   } else {
     // High-DPI Canvas2D subpixel bilinear sand renderer fallback (replace canvas if WebGL claimed context)
