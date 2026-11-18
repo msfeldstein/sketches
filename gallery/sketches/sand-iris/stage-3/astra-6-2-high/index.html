@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#060606">
+<title>Sand Iris</title>
+<style>
+  * { box-sizing: border-box }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #060606 }
+  canvas { width: 100%; height: 100%; display: block }
+</style>
+</head>
+<body>
+<canvas aria-label="A monochrome sand iris. Silver radial fibers rise from charcoal hollows around a slowly dilating black pupil as light moves over the grains." role="img"></canvas>
+<script>
+'use strict';
+
+const canvas = document.querySelector('canvas');
+const context = canvas.getContext('2d', { alpha: false });
+const tau = Math.PI * 2;
+const clamp = (x, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
+function smooth(a, b, x) {
+  const t = clamp((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+}
+function generator(seed) {
+  return () => {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    return (seed >>> 0) / 4294967296;
+  };
+}
+const geology = generator(20462351);
+
+// Closed noise curves keep the fibers continuous across the angular seam.
+function makeCurve(count) {
+  const values = Float32Array.from({ length: count }, () => geology() * 2 - 1);
+  return function(turn) {
+    const x = turn * count;
+    const i = Math.floor(x);
+    const f = x - i;
+    const t = f * f * (3 - 2 * f);
+    const a = values[i & (count - 1)];
+    return a + (values[(i + 1) & (count - 1)] - a) * t;
+  };
+}
+const continent = makeCurve(8), glints = makeCurve(32), lobes = makeCurve(32);
+const notches = makeCurve(64), folds = makeCurve(128), fray = makeCurve(512);
+const bundles = makeCurve(128), strands = makeCurve(512), silk = makeCurve(1024);
+const bends = makeCurve(32), tips = makeCurve(256);
+function crown(a) {
+  return .468 + .051 * lobes(a) + .027 * notches(a) + .014 * folds(a) + .0035 * fray(a);
+}
+function pupil(a) {
+  return .291 + .0028 * continent(a) + .0022 * notches(a) + .0012 * tips(a);
+}
+
+// Individual stromal openings have a tapered floor and a lit, broken lip.
+const openings = Array.from({ length: 256 }, () => []);
+for (let i = 0; i < 108; i++) {
+  const a = (i + geology() * .88) / 108;
+  const inner = i % 5 !== 0;
+  const radius = inner ? crown(a) + .011 + geology() * .048 : .59 + .20 * geology();
+  const width = .005 + Math.pow(geology(), 1.8) * .025;
+  const length = .019 + geology() * .078;
+  const hole = { a, radius, width, length, lean: (geology() - .5) * .62,
+    strength: .5 + geology() * .5 };
+  for (let b = 0; b < 256; b++) {
+    const delta = (b + .5) / 256 - a;
+    if (Math.abs(delta - Math.round(delta)) < .046) openings[b].push(hole);
+  }
+}
+
+function makeIris(size) {
+  const rng = generator(729181);
+  const picture = new ImageData(size, size);
+  const data = picture.data;
+  const words = new Uint32Array(data.buffer);
+  words.fill(0xff060606);
+  const R = size / 2.32, center = size / 2;
+
+  // Small asymmetric kernels represent mineral chips. Each chip has an
+  // illuminated upper facet and a shaded foot, even at high pixel densities.
+  const kernels = [];
+  const unit = size / 1100;
+  for (let scale = 0; scale < 20; scale++) {
+    const shapes = [];
+    for (let variant = 0; variant < 8; variant++) {
+      const points = [];
+      const radius = unit * (.38 + scale * .17);
+      const angle = variant * 2.4;
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      const aspect = .62 + (variant % 3) * .12;
+      const extent = Math.ceil(radius + 1);
+      for (let dy = -extent; dy <= extent; dy++) {
+        for (let dx = -extent; dx <= extent; dx++) {
+          const x = dx + .24 * Math.sin(variant), y = dy + .3 * Math.cos(variant);
+          const u = x * cos + y * sin, v = (y * cos - x * sin) / aspect;
+          const d = Math.max(Math.abs(u) * .95, Math.abs(v) * .92,
+            .68 * Math.abs(u) + .67 * Math.abs(v));
+          const alpha = clamp(radius + .49 - d);
+          if (alpha <= .014) continue;
+          const face = .98 - .24 * (x + y) / (radius + .4) +
+            (u - v < -radius * .4 ? .17 : 0);
+          points.push([dy * size + dx, alpha, face]);
+        }
+      }
+      shapes.push(points);
+    }
+    kernels.push(shapes);
+  }
+  function grain(x, y, scale, luminance) {
+    const px = Math.round(x * R + center), py = Math.round(y * R + center);
+    if (px < 8 || py < 8 || px >= size - 8 || py >= size - 8) return;
+    const base = py * size + px;
+    const kernel = kernels[scale][Math.floor(rng() * 8)];
+    for (const [offset, coverage, light] of kernel) {
+      const i = (base + offset) * 4;
+      data[i] += (luminance * light - data[i]) * coverage;
+      data[i + 1] = data[i + 2] = data[i];
+    }
+  }
+
+  function sand(r, a, scale) {
+    const angle = a * tau, x = r * Math.cos(angle), y = r * Math.sin(angle);
+    const edge = 1 + .0018 * folds(a) + .001 * continent(a);
+    if (r > edge) return;
+    const p = pupil(a);
+    if (r < p - .002) return;
+    const c = crown(a);
+    const middle = Math.sin((r - .28) * 4.4);
+    const warp = a + .010 * bends(a) * middle +
+      .0048 * Math.sin(33 * a + 11 * r + 2.4 * continent(a)) +
+      .0028 * Math.sin(113 * a - 17 * r + 2 * glints(a)) +
+      .0016 * Math.sin(230 * a + 33 * r);
+    const broad = bundles(warp);
+    const fine = strands(warp + .0018 * Math.sin(r * 24 + 40 * a) + .0014 * broad);
+    const hair = silk(warp - .0024 * Math.sin(r * 28 - a * 70) + .001 * fine);
+    const w = warp + .0045 * Math.sin(52 * a - 14 * r);
+    const trunk = Math.max(broad, .8 * bundles(w) - .15);
+    const thread = strands(a + .005 * bends(a) + .006 * Math.sin(9 * r + 38 * a) +
+      .0019 * Math.sin(26 * r - 83 * a));
+    const filament = smooth(.17, .88, thread) * (.52 + .28 * glints(a) + .20 * broad);
+    const vein = .47 * trunk + .29 * fine + .24 * hair + .35 * filament;
+    let cavity = 0, lip = 0;
+    for (const h of openings[Math.floor(a * 256)]) {
+      const v = (r - h.radius) / h.length;
+      if (Math.abs(v) > 1.28) continue;
+      let da = a - h.a;
+      da -= Math.round(da);
+      const u = (da * tau * h.radius - h.lean * (r - h.radius) -
+        .003 * v * v) / h.width;
+      const d = .86 * Math.sqrt(u * u + v * v) + .14 * (Math.abs(u) + Math.abs(v));
+      cavity = Math.max(cavity, (1 - smooth(.47, 1.07, d)) * h.strength);
+      if (d < 1.28) lip = Math.max(lip, (1 - smooth(.02, .24, Math.abs(d - 1))) *
+        (.45 + .25 * u + .18 * v) * h.strength);
+    }
+
+    // Grazing light picks out the shoulders of individual fiber bundles.
+    const slope = clamp((bundles(warp - .00065) - broad) * 2.8, -1, 1);
+    const crossLight = .88 * Math.sin(angle) - .47 * Math.cos(angle);
+    const relief = slope * crossLight;
+    const sector = .55 * continent(a + .04 * (r - .6)) + .45 * glints(warp);
+    const innerZone = 1 - smooth(c - .032, c + .035 + .02 * fine, r);
+    const collarette = 1 - smooth(.001, .023, Math.abs(r - c - .005 * fine));
+    const crest = 1 - smooth(.001, .007, Math.abs(r - c - .004 * hair));
+    const collar = (collarette + .67 * crest) * (.54 + .46 * fine);
+    const rim = smooth(.895 + .012 * broad, .989, r);
+    const nearPupil = smooth(p - .001, p + .050 + .014 * notches(a), r);
+    const rings = r + .008 * bends(a) + .005 * Math.sin(angle * 5 + r * 8);
+    const furrow = Math.max(0, Math.cos(rings * 173 + 4 * continent(a))) ** 8 *
+      smooth(.65, .86, r) * (.45 + .42 * glints(a + .1 * r));
+    const keyLight = .92 - .34 * x - .25 * y;
+    const etched = smooth(.18, .62, vein + .25 * relief);
+    const shoulder = Math.max(0, relief) * (.45 + .55 * smooth(-.55, .45, broad));
+    let silver = 52 + 75 * vein + 76 * etched + 82 * shoulder + 19 * sector;
+    silver *= 1 - .25 * innerZone;
+    silver += 103 * collar + 103 * lip + 26 * filament;
+    silver *= (1 - .95 * cavity) * (1 - .81 * furrow);
+    silver *= (.14 + .86 * nearPupil) * (1 - .86 * rim);
+
+    // A broken dusting of silver on the light-facing edge of the limbal ring.
+    const rimEdge = edge - .011 + .003 * fine;
+    const rimCrest = 1 - smooth(.001, .0075, Math.abs(r - rimEdge));
+    silver += 68 * rimCrest * clamp(-.83 * x - .56 * y + .3 * broad);
+    const crystal = rng();
+    silver *= keyLight * (.73 + .52 * rng());
+    if (crystal < .10) silver *= .17 + .32 * rng();
+    if (crystal > .962) silver += (22 + 55 * rng()) * keyLight;
+    grain(x, y, scale, Math.max(3, silver));
+  }
+
+  // Deposit coarse grains first. Finer deposits reveal the relief between them.
+  for (const [count, low, range] of [[135000, 7, 9], [192000, 3, 8], [160000, 0, 6]]) {
+    for (let i = 0; i < count; i++) {
+      const r = Math.sqrt(.082 + rng() * .925);
+      sand(r, rng(), low + Math.floor(rng() * range));
+    }
+  }
+  // Loose grains at both margins soften the silhouette without obscuring it.
+  for (let i = 0; i < 8900; i++) {
+    const a = rng(), t = a * tau;
+    const inside = i < 1400;
+    const drift = smooth(-.4, .78, glints(a)) * (.52 + .48 * strands(a));
+    const dist = -Math.log(Math.max(.00001, rng())) * (inside ? .0028 : .009 + .034 * drift);
+    const r = inside ? pupil(a) - dist : 1 + dist;
+    const light = (.18 + rng() ** 3) * Math.exp(-dist * 13);
+    const exposure = inside ? 77 : 115 - 29 * Math.cos(t) - 22 * Math.sin(t);
+    grain(r * Math.cos(t), r * Math.sin(t), Math.floor(rng() ** 2 * 10), exposure * light);
+  }
+  return picture;
+}
+
+// Sample the same grains throughout the animation so their facets stay coherent.
+const cached = document.createElement('canvas');
+cached.width = cached.height = 1536;
+cached.getContext('2d').putImageData(makeIris(cached.width), 0, 0);
+const surface = document.createElement('canvas');
+const surfaceContext = surface.getContext('2d', { willReadFrequently: true });
+const cell = 20;
+let size, side, source, pixels, output, mesh, columns, rows;
+const shades = Uint32Array.from({ length: 256 }, (_, i) => (0xff000000 | i * 0x010101));
+
+function resize() {
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(window.innerWidth * ratio);
+  canvas.height = Math.round(window.innerHeight * ratio);
+  context.fillStyle = '#060606';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  side = Math.min(canvas.width, canvas.height);
+  const nextSize = Math.max(1, Math.min(side, 1280));
+  if (nextSize === size) return;
+  size = surface.width = surface.height = nextSize;
+  surfaceContext.imageSmoothingQuality = 'high';
+  surfaceContext.drawImage(cached, 0, 0, size, size);
+  pixels = surfaceContext.getImageData(0, 0, size, size);
+  output = new Uint32Array(pixels.data.buffer);
+  source = new Uint8Array(size * (size + 1) + 1).fill(6);
+  for (let i = 0; i < output.length; i++) source[i] = pixels.data[4 * i];
+
+  // The inner fibers follow the pupil. Their displacement tapers to zero at the rim.
+  columns = Math.ceil(size / cell) + 1;
+  rows = Math.ceil(size / cell) + 1;
+  const radius = size / 2.32;
+  mesh = Array.from({ length: rows * columns }, (_, i) => {
+    const x = cell * (i % columns), y = cell * Math.floor(i / columns);
+    const dx = (x - size / 2) / radius, dy = (y - size / 2) / radius;
+    const r = Math.hypot(dx, dy);
+    const weight = (1 - smooth(.29, .98, r)) / Math.max(.29, r);
+    const flex = smooth(.30, .56, r) * (1 - smooth(.60, .96, r));
+    return { x, y, u: x, v: y, light: 1, fixed: weight === 0,
+      radialX: dx * weight * radius, radialY: dy * weight * radius,
+      twistX: -dy * flex * radius, twistY: dx * flex * radius,
+      lightX: dx, lightY: dy };
+  });
+}
+
+function paint(seconds) {
+  const breath = .020 * Math.sin(seconds * tau / 17) + .003 * Math.sin(seconds * tau / 29);
+  const twist = .006 * Math.sin(seconds * tau / 23);
+  const lightX = .105 * Math.sin(seconds * tau / 33);
+  const lightY = .062 * Math.sin(seconds * tau / 41);
+  for (const node of mesh) {
+    node.u = node.x - breath * node.radialX - twist * node.twistX;
+    node.v = node.y - breath * node.radialY - twist * node.twistY;
+    node.light = 1 + lightX * node.lightX + lightY * node.lightY;
+  }
+
+  const width = size, grains = source, framePixels = output;
+  // Interpolate the moving texture coordinates across each mesh cell. Subpixel
+  // sampling lets a fiber move a fraction of a grain's width without flicker.
+  for (let y = 0; y < width; y++) {
+    const row = Math.floor(y / cell) * columns;
+    const fy = (y % cell) / cell;
+    for (let x = 0, col = 0; x < width; x += cell, col++) {
+      const a = mesh[row + col], b = mesh[row + col + 1];
+      const c = mesh[row + col + columns], d = mesh[row + col + columns + 1];
+      // Outside the limbus the original loose grains stay in place.
+      if (a.fixed && b.fixed && c.fixed && d.fixed) continue;
+      let u = a.u + (c.u - a.u) * fy;
+      let v = a.v + (c.v - a.v) * fy;
+      let light = a.light + (c.light - a.light) * fy;
+      const du = Math.round((b.u + (d.u - b.u) * fy - u) * 65536 / cell);
+      const dv = Math.round((b.v + (d.v - b.v) * fy - v) * 65536 / cell);
+      const dl = Math.round((b.light + (d.light - b.light) * fy - light) * 65536 / cell);
+      // Fixed-point stepping keeps the inner sampling loop inexpensive.
+      u = Math.round(u * 65536);
+      v = Math.round(v * 65536);
+      light = Math.round(light * 65536);
+      let index = y * width + x;
+      const end = index + Math.min(cell, width - x);
+      for (; index < end; index++, u += du, v += dv, light += dl) {
+        const src = (v >> 16) * width + (u >> 16);
+        const fx = (u >> 8) & 255, fyPixel = (v >> 8) & 255;
+        const top = (grains[src] << 8) + fx * (grains[src + 1] - grains[src]);
+        const bottom = (grains[src + width] << 8) + fx * (grains[src + width + 1] - grains[src + width]);
+        const gray = (top + ((fyPixel * (bottom - top)) >> 8) + 128) >> 8;
+        const lit = 6 + (((gray - 6) * light + 32768) >> 16);
+        framePixels[index] = shades[Math.min(255, Math.max(0, lit))];
+      }
+    }
+  }
+  surfaceContext.putImageData(pixels, 0, 0);
+  context.drawImage(surface, (canvas.width - side) / 2, (canvas.height - side) / 2, side, side);
+}
+
+let elapsed = 0, previous = 0, lastPaint = -Infinity;
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+let needsResize = true, frame;
+function animate(now) {
+  if (needsResize) {
+    resize();
+    needsResize = false;
+    lastPaint = -Infinity;
+  }
+  if (previous) elapsed += Math.min(now - previous, 100) / 1000;
+  previous = now;
+  if (now - lastPaint >= 1000 / 30 - 1) {
+    paint(elapsed);
+    lastPaint = now;
+  }
+  if (!reducedMotion.matches) frame = requestAnimationFrame(animate);
+}
+function resume() {
+  cancelAnimationFrame(frame);
+  previous = 0;
+  lastPaint = -Infinity;
+  if (!document.hidden) frame = requestAnimationFrame(animate);
+}
+window.addEventListener('resize', () => {
+  needsResize = true;
+  resume();
+});
+document.addEventListener('visibilitychange', resume);
+reducedMotion.addEventListener('change', resume);
+resume();
+</script>
+</body>
+</html>

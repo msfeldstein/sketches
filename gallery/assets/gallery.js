@@ -2,12 +2,13 @@
   "use strict";
 
   var manifest = window.GALLERY_MANIFEST;
-  var roundsEl = document.getElementById("rounds");
+  var promptsEl = document.getElementById("rounds");
   var pauseAll = document.getElementById("pause-all");
   var toastEl = document.getElementById("toast");
   // Offscreen tiles are torn down after this delay so quick scroll-bys don't thrash.
   var UNLOAD_DELAY_MS = 800;
   var tiles = [];
+  var params = new URLSearchParams(window.location.search);
 
   function el(tag, attrs, children) {
     var node = document.createElement(tag);
@@ -22,8 +23,8 @@
     return node;
   }
 
-  function sketchPath(round, entry) {
-    return "sketches/" + round.id + "/" + entry.id + "/";
+  function sketchPath(prompt, stageNum, entry) {
+    return "sketches/" + prompt.id + "/stage-" + stageNum + "/" + entry.id + "/";
   }
 
   function absoluteUrl(path) {
@@ -56,52 +57,160 @@
     }
   }
 
-  function Tile(round, entry) {
-    var self = this;
-    var path = sketchPath(round, entry);
-    var url = absoluteUrl(path);
-    var label = entry.model + (entry.detail ? " — " + entry.detail : "");
-    var title = round.title + " · " + label;
+  function clampStage(prompt, n) {
+    n = parseInt(n, 10);
+    if (!(n >= 1)) return 1;
+    return Math.min(n, prompt.stages.length);
+  }
 
-    this.path = path;
-    this.title = title;
+  function stageName(prompt, n) {
+    var s = prompt.stages[n - 1];
+    return "Stage " + n + (s.label ? " · " + s.label : "");
+  }
+
+  // Stage picker shared by tiles and the per-prompt "all tiles" control.
+  // onSelect(n) is called with a 1-based stage number.
+  function StagePicker(prompt, opts) {
+    var self = this;
+    this.count = prompt.stages.length;
+    this.onSelect = opts.onSelect;
+    this.isAvailable = opts.isAvailable || function () { return true; };
+    this.prev = el("button", { className: "stage-step", type: "button", "aria-label": "Previous stage", text: "‹" });
+    this.next = el("button", { className: "stage-step", type: "button", "aria-label": "Next stage", text: "›" });
+    this.prev.addEventListener("click", function () { self.step(-1); });
+    this.next.addEventListener("click", function () { self.step(1); });
+    this.tabs = prompt.stages.map(function (s, i) {
+      var n = i + 1;
+      var tab = el("button", {
+        className: "stage-tab", type: "button", role: "tab",
+        title: stageName(prompt, n) + ": " + s.prompt,
+      }, [
+        el("span", { className: "stage-num", text: String(n) }),
+        opts.compact ? null : el("span", { className: "stage-label", text: s.label || "" }),
+      ]);
+      if (!self.isAvailable(n)) { tab.disabled = true; tab.title += " (no sketch)"; }
+      tab.addEventListener("click", function () { self.onSelect(n); });
+      return tab;
+    });
+    this.current = null;
+    this.node = el("div", { className: "stage-picker" + (opts.compact ? " compact" : ""), role: "tablist", "aria-label": opts.ariaLabel },
+      [this.prev].concat(this.tabs, [this.next]));
+  }
+
+  StagePicker.prototype.step = function (dir) {
+    var n = this.current || 1;
+    do { n += dir; } while (n >= 1 && n <= this.count && !this.isAvailable(n));
+    if (n >= 1 && n <= this.count) this.onSelect(n);
+  };
+
+  StagePicker.prototype.set = function (n) {
+    this.current = n;
+    this.tabs.forEach(function (t, i) {
+      var on = i + 1 === n;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    this.prev.disabled = !n || n <= 1;
+    this.next.disabled = !n || n >= this.count;
+  };
+
+  function Tile(prompt, entry) {
+    var self = this;
+    this.prompt = prompt;
+    this.entry = entry;
+    this.label = entry.model + (entry.detail ? " — " + entry.detail : "");
+    this.available = entry.stages || prompt.stages.map(function (_, i) { return i + 1; });
+    this.multi = prompt.stages.length > 1;
+    this.stageNum = null;
     this.visible = false;
     this.iframe = null;
     this.unloadTimer = null;
 
-    this.stage = el("div", { className: "stage" }, [
-      el("div", { className: "stage-placeholder", text: "Paused" }),
-    ]);
+    this.placeholder = el("div", { className: "stage-placeholder", text: "Paused" });
+    this.stage = el("div", { className: "stage" }, [this.placeholder]);
+    this.stageLink = el("a", { className: "stage-link", target: "_blank", rel: "noopener" }, [this.stage]);
 
-    var fullLink = el("a", {
-      className: "btn", href: path, target: "_blank", rel: "noopener",
+    this.fullLink = el("a", {
+      className: "btn", target: "_blank", rel: "noopener",
       title: "Open full-screen in a new tab", text: "Full screen ↗",
     });
     var reloadBtn = el("button", { className: "btn", type: "button", title: "Restart this sketch", text: "Restart" });
     reloadBtn.addEventListener("click", function () { self.unload(); self.maybeLoad(); });
 
-    var snippet = embedSnippet(url, title);
-    var input = el("input", { className: "embed-input", type: "text", readonly: "", value: snippet, "aria-label": "Embed code for " + label });
-    input.addEventListener("focus", function () { input.select(); });
-    var copyBtn = el("button", { className: "btn btn-primary", type: "button", text: "Copy embed" });
-    copyBtn.addEventListener("click", function () { copyText(snippet, input); });
+    this.input = el("input", { className: "embed-input", type: "text", readonly: "" });
+    this.input.addEventListener("focus", function () { self.input.select(); });
+    var copyBtn = this.copyBtn = el("button", { className: "btn btn-primary", type: "button", text: "Copy embed" });
+    copyBtn.addEventListener("click", function () { copyText(self.input.value, self.input); });
+
+    var stageRow = null;
+    if (this.multi) {
+      this.picker = new StagePicker(prompt, {
+        compact: true,
+        ariaLabel: "Stage for " + this.label,
+        isAvailable: function (n) { return self.hasStage(n); },
+        onSelect: function (n) { self.setStage(n); updateGroupPicker(prompt); },
+      });
+      this.stagePrompt = el("p", { className: "tile-stage-prompt" });
+      stageRow = el("div", { className: "tile-stage" }, [
+        el("div", { className: "tile-stage-head" }, [
+          this.stageTitle = el("span", { className: "tile-stage-title" }),
+          this.picker.node,
+        ]),
+        this.stagePrompt,
+      ]);
+    }
 
     this.node = el("article", { className: "tile" }, [
-      el("a", { className: "stage-link", href: path, target: "_blank", rel: "noopener", "aria-label": "Open " + label + " full screen" }, [this.stage]),
+      this.stageLink,
       el("div", { className: "tile-body" }, [
         el("div", { className: "tile-head" }, [
           el("h3", { className: "model", text: entry.model }),
           entry.detail ? el("span", { className: "detail", text: entry.detail }) : null,
         ]),
-        el("div", { className: "actions" }, [fullLink, reloadBtn, copyBtn]),
-        input,
+        stageRow,
+        el("div", { className: "actions" }, [this.fullLink, reloadBtn, copyBtn]),
+        this.input,
       ]),
     ]);
+    this.node.__tile = this;
   }
+
+  Tile.prototype.hasStage = function (n) {
+    return this.available.indexOf(n) !== -1;
+  };
+
+  Tile.prototype.setStage = function (n) {
+    if (n === this.stageNum) return;
+    this.stageNum = n;
+    var ok = this.hasStage(n);
+    var s = this.prompt.stages[n - 1];
+    var title = this.prompt.title + " · " + (this.multi ? stageName(this.prompt, n) + " · " : "") + this.label;
+    this.path = ok ? sketchPath(this.prompt, n, this.entry) : null;
+    this.title = title;
+
+    this.node.classList.toggle("missing", !ok);
+    this.placeholder.textContent = ok ? "Paused" : "No sketch for this stage";
+    [this.stageLink, this.fullLink].forEach(function (a) {
+      if (ok) a.setAttribute("href", this.path); else a.removeAttribute("href");
+    }, this);
+    this.stageLink.setAttribute("aria-label", "Open " + title + " full screen");
+    this.copyBtn.disabled = !ok;
+    this.fullLink.classList.toggle("disabled", !ok);
+    this.input.value = ok ? embedSnippet(absoluteUrl(this.path), title) : "";
+    this.input.setAttribute("aria-label", "Embed code for " + title);
+
+    if (this.multi) {
+      this.picker.set(n);
+      this.stageTitle.textContent = stageName(this.prompt, n);
+      this.stagePrompt.textContent = s.prompt;
+    }
+    this.unload();
+    this.maybeLoad();
+  };
 
   Tile.prototype.maybeLoad = function () {
     clearTimeout(this.unloadTimer);
-    if (this.iframe || !this.visible || pauseAll.checked) return;
+    if (this.iframe || !this.path || !this.visible || pauseAll.checked) return;
     // The iframe sits under a transparent link so clicking a tile opens the full sketch.
     this.iframe = el("iframe", { src: this.path, title: this.title, tabindex: "-1", allow: "fullscreen" });
     this.stage.appendChild(this.iframe);
@@ -122,6 +231,73 @@
     this.unloadTimer = setTimeout(function () { self.unload(); }, UNLOAD_DELAY_MS);
   };
 
+  var groups = {};
+
+  // The group picker shows a stage as active only when every tile is on it.
+  function updateGroupPicker(prompt) {
+    var g = groups[prompt.id];
+    if (!g) return;
+    var first = g.tiles[0].stageNum;
+    var same = g.tiles.every(function (t) { return t.stageNum === first; });
+    g.picker.set(same ? first : null);
+    g.prompt.textContent = same ? prompt.stages[first - 1].prompt : "Tiles are on different stages.";
+    g.title.textContent = same ? stageName(prompt, first) : "Mixed stages";
+  }
+
+  function setGroupStage(prompt, n, updateUrl) {
+    var g = groups[prompt.id];
+    g.tiles.forEach(function (t) { t.setStage(n); });
+    updateGroupPicker(prompt);
+    if (updateUrl) {
+      if (n === 1) params.delete(prompt.id); else params.set(prompt.id, String(n));
+      var qs = params.toString();
+      history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : "") + window.location.hash);
+    }
+  }
+
+  function renderPrompt(prompt) {
+    var multi = prompt.stages.length > 1;
+    var grid = el("div", { className: "grid" });
+    var promptTiles = prompt.entries.map(function (entry) {
+      var tile = new Tile(prompt, entry);
+      tiles.push(tile);
+      grid.appendChild(tile.node);
+      return tile;
+    });
+
+    var head = el("div", { className: "round-head" }, [
+      el("div", { className: "round-title-row" }, [
+        el("h2", { text: prompt.title }),
+        multi ? el("span", { className: "stage-count", text: prompt.stages.length + " stages" }) : null,
+      ]),
+    ]);
+
+    if (multi) {
+      var g = groups[prompt.id] = { tiles: promptTiles };
+      g.picker = new StagePicker(prompt, {
+        ariaLabel: "Stage for all " + prompt.title + " tiles",
+        onSelect: function (n) { setGroupStage(prompt, n, true); },
+      });
+      g.title = el("span", { className: "prompt-label" });
+      g.prompt = el("span");
+      head.appendChild(el("div", { className: "group-stage" }, [
+        el("span", { className: "group-stage-caption", text: "All tiles" }),
+        g.picker.node,
+      ]));
+      head.appendChild(el("p", { className: "prompt" }, [g.title, g.prompt]));
+    } else {
+      head.appendChild(el("p", { className: "prompt" }, [
+        el("span", { className: "prompt-label", text: "Prompt" }),
+        document.createTextNode(prompt.stages[0].prompt),
+      ]));
+    }
+
+    promptsEl.appendChild(el("section", { className: "round", id: prompt.id }, [head, grid]));
+
+    if (multi) setGroupStage(prompt, clampStage(prompt, params.get(prompt.id)), false);
+    else promptTiles.forEach(function (t) { t.setStage(1); });
+  }
+
   function render() {
     document.title = manifest.title;
     document.getElementById("site-title").textContent = manifest.title;
@@ -129,28 +305,12 @@
     var notesEl = document.getElementById("site-notes");
     (manifest.notes || []).forEach(function (n) { notesEl.appendChild(el("li", { text: n })); });
 
-    var nav = el("nav", { className: "round-nav", "aria-label": "Rounds" });
-    manifest.rounds.forEach(function (round) {
-      nav.appendChild(el("a", { href: "#" + round.id, text: round.title }));
+    var nav = el("nav", { className: "round-nav", "aria-label": "Prompts" });
+    manifest.prompts.forEach(function (prompt) {
+      nav.appendChild(el("a", { href: "#" + prompt.id, text: prompt.title }));
     });
-    roundsEl.appendChild(nav);
-
-    manifest.rounds.forEach(function (round) {
-      var grid = el("div", { className: "grid" });
-      round.entries.forEach(function (entry) {
-        var tile = new Tile(round, entry);
-        tile.node.__tile = tile;
-        tiles.push(tile);
-        grid.appendChild(tile.node);
-      });
-      roundsEl.appendChild(el("section", { className: "round", id: round.id }, [
-        el("div", { className: "round-head" }, [
-          el("h2", { text: round.title }),
-          round.prompt ? el("p", { className: "prompt" }, [el("span", { className: "prompt-label", text: "Prompt" }), document.createTextNode(round.prompt)]) : null,
-        ]),
-        grid,
-      ]));
-    });
+    promptsEl.appendChild(nav);
+    manifest.prompts.forEach(renderPrompt);
   }
 
   function observe() {
