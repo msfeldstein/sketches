@@ -5,6 +5,7 @@
 //   sketches/<prompt id>/stage-<n>/<entry id>/index.html   (n is 1-based)
 // To add a follow-up, append a stage and drop each model's page in stage-<n>/.
 // If a model has no sketch for some stages, list the ones it has in `stages`.
+// `stageNotes` ({ <n>: "text" }) adds a note to that model's card on stage n.
 window.GALLERY_MANIFEST = {
   title: "Model Sketchbook",
   subtitle:
@@ -37,8 +38,14 @@ window.GALLERY_MANIFEST = {
       ],
       entries: [
         { id: "opus-5-5", model: "Opus 5.5", detail: "Cursor" },
-        { id: "astra-6-2-high", model: "Astra 6.2", detail: "High reasoning · Codex" },
-        { id: "astra-6-2-none", model: "Astra 6.2", detail: "No reasoning · Codex" },
+        {
+          id: "astra-6-2-high", model: "Astra 6.2", detail: "High reasoning · Codex",
+          stageNotes: { 4: "Revised after feedback that the motion was invisible" },
+        },
+        {
+          id: "astra-6-2-none", model: "Astra 6.2", detail: "No reasoning · Codex",
+          stageNotes: { 4: "Revised after feedback that the motion was invisible" },
+        },
       ],
     },
     {

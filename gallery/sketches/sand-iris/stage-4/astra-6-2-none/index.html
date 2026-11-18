@@ -56,9 +56,11 @@ function angularFields(time){
 }
 let anchors,count,dust,R,d,unit;
 const interval=.75;
-function sample(time){
+function sample(seconds){
+ // Start between noise slices so the first few seconds already show motion.
+ const time=seconds*3.4+5.2;
  const field=angularFields(time),sin=Math.sin,cos=Math.cos;
- const phase=time*.046;
+ const phase=time*.085;
  function collar(a){return .464+.031*sin(7*a+.6+phase*.38)+.016*sin(14*a-phase*.57)+.074*(field(1,a)-.5)}
  const data=new Float32Array((count+dust)*4);
  function fill(start,end){
@@ -101,9 +103,14 @@ function sample(time){
   light+=.34*smooth(clamp((.045-temporal(i,time*.039,227))/.03));
   const size=(.70+1.84*temporal(i,time*.031,89)**2)*unit*(1+.23*ridge);
   const visible=clamp((r-pupil+.003)/.002)*clamp((edge+.005-r)/.002);
-  const displaced=r+(.013*sin(time*.37)+.003*sin(time*.19))*(1-smooth(clamp((r-.25)/.74)));
+  const tissue=1-smooth(clamp((r-.25)/.74));
+  const breath=.028*sin(seconds*.48)+.006*sin(seconds*.24);
+  const displaced=r+breath*tissue;
+  // Carry adjacent grains together as the bundles flex, tapering at the rim.
+  const flex=.055*sin(seconds*.36+3*a+4*r)+.024*sin(seconds*.23-5*a+6*r);
+  const direction=a+flex*(.22+.78*tissue);
   const v=clamp(light)*2.999,k=Math.floor(v),ramp=palettes[p];
-  data[j]=R*d*displaced*cos(a);data[j+1]=R*d*displaced*sin(a);
+  data[j]=R*d*displaced*cos(direction);data[j+1]=R*d*displaced*sin(direction);
   data[j+2]=size*d*visible;data[j+3]=blend(ramp[k][0],ramp[k+1][0],v-k)/255;
  }
  }
@@ -190,7 +197,7 @@ function rebuild(){
 window.addEventListener('resize',()=>{dirty=true});
 function animate(timestamp){
  if(dirty){rebuild();dirty=false;last=timestamp}
- elapsed+=Math.min(.05,(timestamp-last)*.001);last=timestamp;
+ elapsed+=Math.min(interval,(timestamp-last)*.001);last=timestamp;
  const total=count+dust;
  // Prepare the following time slice progressively while the GPU interpolates
  // the two complete particle states. Particle identities persist across slices.
