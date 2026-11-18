@@ -30,6 +30,10 @@ window.GALLERY_MANIFEST = {
           label: "Animated",
           prompt: "Animate it slowly.",
         },
+        {
+          label: "Evolving",
+          prompt: "Have the iris slowly animate all of its noise functions across a time dimension.",
+        },
       ],
       entries: [
         { id: "opus-5-5", model: "Opus 5.5", detail: "Cursor" },
