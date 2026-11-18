@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#060606">
+<title>Sand Iris</title>
+<style>
+  * { box-sizing: border-box }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #060606 }
+  canvas { width: 100%; height: 100%; display: block }
+</style>
+</head>
+<body>
+<canvas aria-label="A monochrome sand iris. Silver radial fibers rise from charcoal hollows around a slowly dilating black pupil as the grain bed, branching fibers, and crypts slowly evolve. Small electric currents run through the fibers, lighting the grains silver." role="img"></canvas>
+<script>
+'use strict';
+
+const routeCount = 30, knotsPerRoute = 40;
+
+function createModel(count, routes = routeCount, knots = knotsPerRoute) {
+  const bodyCount = Math.round(count * 487000 / 495900);
+  const tau = Math.PI * 2;
+  const clamp = (x, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
+  function smooth(a, b, x) {
+    const t = clamp((x - a) / (b - a));
+    return t * t * (3 - 2 * t);
+  }
+  function generator(seed) {
+    return () => {
+      seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+      return (seed >>> 0) / 4294967296;
+    };
+  }
+  const geology = generator(20462351);
+
+
+  // A lattice address identifies a sample, independently of draw order or visibility.
+  function hash(id, channel, epoch) {
+    let n = Math.imul(id + 1, 0x9e3779b1) ^ Math.imul(channel + 1, 0x85ebca77)
+      ^ Math.imul(epoch, 0xc2b2ae3d);
+    n = Math.imul(n ^ (n >>> 16), 0x21f0aaad);
+    n = Math.imul(n ^ (n >>> 15), 0x735a2d97);
+    return ((n ^ (n >>> 15)) >>> 0) / 4294967296;
+  }
+
+  // Each angular lattice site has a smoothly varying value along the time axis.
+  // Cubic interpolation carries a continuous slope across successive time slices.
+  function cubic(a, b, c, d, t) {
+    return b + .5 * t * ((c - a) + t * ((2*a - 5*b + 4*c - d) + t * (3*b - a - 3*c + d)));
+  }
+  const curves = [];
+  function makeCurve(count, period) {
+    const base = Float32Array.from({ length: count }, () => geology() * 2 - 1);
+    const values = new Float32Array(count);
+    const channel = curves.length;
+    function row(i, e) { return e === 0 ? base[i] : 2 * hash(i, channel, e) - 1; }
+    curves.push(seconds => {
+      const time = seconds / period, e = Math.floor(time), f = time - e;
+      for (let i = 0; i < count; i++)
+        values[i] = cubic(row(i,e-1), row(i,e), row(i,e+1), row(i,e+2), f);
+    });
+    return turn => {
+      const x = turn * count, i = Math.floor(x), f = x - i;
+      const a = values[i & (count - 1)];
+      return a + (values[(i+1) & (count-1)] - a) * f * f * (3 - 2*f);
+    };
+  }
+  const continent = makeCurve(8, 72), glints = makeCurve(32, 44), lobes = makeCurve(32, 61);
+  const notches = makeCurve(64, 49), folds = makeCurve(128, 46), fray = makeCurve(512, 35);
+  const bundles = makeCurve(128, 53), strands = makeCurve(512, 40), silk = makeCurve(1024, 33);
+  const bends = makeCurve(32, 67), tips = makeCurve(256, 42);
+  function crown(a) {
+    return .468 + .051 * lobes(a) + .027 * notches(a) + .014 * folds(a) + .0035 * fray(a);
+  }
+  function pupil(a) {
+    return .291 + .0028 * continent(a) + .0022 * notches(a) + .0012 * tips(a);
+  }
+
+
+  // The original seeded samples define the cross-section at time zero.
+  const cryptSeeds = Array.from({ length: 108 }, () => Array.from({ length: 6 }, geology));
+  function prepare(seconds) {
+    const fieldTime = seconds * 4.8;
+    curves.forEach(update => update(fieldTime));
+    const openings = Array.from({ length: 256 }, () => []);
+    cryptSeeds.forEach((seed, i) => {
+      function field(k) {
+        const t = fieldTime / (39 + 4*k + i%9), e = Math.floor(t);
+        const row = n => n === 0 ? seed[k] : hash(i, 31+k, n);
+        return clamp(cubic(row(e-1), row(e), row(e+1), row(e+2), t-e));
+      }
+      const a = (i + .88 * field(0)) / 108;
+      const radius = i % 5 ? crown(a) + .011 + .048 * field(1) : .59 + .20 * field(1);
+      const hole = { a, radius, width: .005 + .025 * field(2) ** 1.8,
+        length: .019 + .078 * field(3), lean: (field(4)-.5)*.62, strength: .5 + .5*field(5) };
+      for (let b = -12; b <= 12; b++)
+        openings[(Math.floor(a * 256) + b + 256) % 256].push(hole);
+    });
+    const breath = .035 * Math.sin(seconds * tau / 12) + .006 * Math.sin(seconds * tau / 21);
+    const lx = .15 * Math.sin(seconds * tau / 19), ly = .10 * Math.sin(seconds * tau / 23);
+    const wave = .54 * Math.sin(fieldTime / 21), ripple = .38 * Math.sin(fieldTime / 27);
+    function fiberWarp(r, a) {
+      const middle = Math.sin((r - .28) * 4.4 + .13 * wave);
+      return a + .010 * bends(a) * middle +
+        .0048 * Math.sin(33 * a + 11 * r + 2.4 * continent(a) + wave) +
+        .0028 * Math.sin(113 * a - 17 * r + 2 * glints(a) + ripple) +
+        .0016 * Math.sin(230 * a + 33 * r + wave);
+    }
+    function shade(r, a, x, y) {
+      const edge = 1 + .0018 * folds(a) + .001 * continent(a);
+      const p = pupil(a), c = crown(a);
+      const warp = fiberWarp(r, a);
+      const broad = bundles(warp);
+      const fine = strands(warp + .0018 * Math.sin(r * 24 + 40 * a + ripple) + .0014 * broad);
+      const hair = silk(warp - .0024 * Math.sin(r * 28 - a * 70 + wave) + .001 * fine);
+      const w = warp + .0045 * Math.sin(52 * a - 14 * r + ripple);
+      const trunk = Math.max(broad, .8 * bundles(w) - .15);
+      const thread = strands(a + .005 * bends(a) + .006 * Math.sin(9 * r + 38 * a + wave) +
+        .0019 * Math.sin(26 * r - 83 * a + ripple));
+      const filament = smooth(.17, .88, thread) * (.52 + .28 * glints(a) + .20 * broad);
+      const vein = .47 * trunk + .29 * fine + .24 * hair + .35 * filament;
+      let cavity = 0, lip = 0;
+      for (const h of openings[Math.floor(a * 256)]) {
+        const v = (r - h.radius) / h.length;
+        if (Math.abs(v) > 1.28) continue;
+        let da = a - h.a;
+        da -= Math.round(da);
+        const u = (da * tau * h.radius - h.lean * (r - h.radius) -
+          .003 * v * v) / h.width;
+        const d = .86 * Math.sqrt(u * u + v * v) + .14 * (Math.abs(u) + Math.abs(v));
+        cavity = Math.max(cavity, (1 - smooth(.47, 1.07, d)) * h.strength);
+        if (d < 1.28) lip = Math.max(lip, (1 - smooth(.02, .24, Math.abs(d - 1))) *
+          (.45 + .25 * u + .18 * v) * h.strength);
+      }
+
+      // Grazing light picks out the shoulders of individual fiber bundles.
+      const slope = clamp((bundles(warp - .00065) - broad) * 2.8, -1, 1);
+      const crossLight = (.88 + .5 * ly) * y / r - (.47 + .5 * lx) * x / r;
+      const relief = slope * crossLight;
+      const sector = .55 * continent(a + .04 * (r - .6)) + .45 * glints(warp);
+      const innerZone = 1 - smooth(c - .032, c + .035 + .02 * fine, r);
+      const collarette = 1 - smooth(.001, .023, Math.abs(r - c - .005 * fine));
+      const crest = 1 - smooth(.001, .007, Math.abs(r - c - .004 * hair));
+      const collar = (collarette + .67 * crest) * (.54 + .46 * fine);
+      const rim = smooth(.895 + .012 * broad, .989, r);
+      const nearPupil = smooth(p - .001, p + .050 + .014 * notches(a), r);
+      const rings = r + .008 * bends(a) + .005 * Math.sin(a * tau * 5 + r * 8 + wave);
+      const furrow = Math.max(0, Math.cos(rings * 173 + 4 * continent(a))) ** 8 *
+        smooth(.65, .86, r) * (.45 + .42 * glints(a + .1 * r));
+      const keyLight = .92 + (lx - .34) * x + (ly - .25) * y;
+      const etched = smooth(.18, .62, vein + .25 * relief);
+      const shoulder = Math.max(0, relief) * (.45 + .55 * smooth(-.55, .45, broad));
+      let silver = 52 + 75 * vein + 76 * etched + 82 * shoulder + 19 * sector;
+      silver *= 1 - .25 * innerZone;
+      silver += 103 * collar + 103 * lip + 26 * filament;
+      silver *= (1 - .95 * cavity) * (1 - .81 * furrow);
+      silver *= (.14 + .86 * nearPupil) * (1 - .86 * rim);
+
+      // A broken dusting of silver on the light-facing edge of the limbal ring.
+      const rimEdge = edge - .011 + .003 * fine;
+      const rimCrest = 1 - smooth(.001, .0075, Math.abs(r - rimEdge));
+      silver += 68 * rimCrest * clamp(-.83 * x - .56 * y + .3 * broad);
+      const edgeMask = smooth(p - .003, p + .001, r) * (1 - smooth(edge - .002, edge + .002, r));
+      return silver * keyLight * edgeMask;
+    }
+
+    // Sample independent temporal noise along each persistent grain's trajectory.
+    // The rest position fixes its neighborhood. Drift and facet properties use
+    // separate noise channels, so changes in one grain never reseed its neighbors.
+    const clocks = [23, 31, 36, 47, 29, 38, 52].map((period, k) => {
+      const t = fieldTime / period + .137 * k, e = Math.floor(t), f = t-e;
+      return { e, mix: f*f*(3-2*f) };
+    });
+    function grainNoise(id, k) {
+      const {e, mix} = clocks[k];
+      const a = hash(id, 64+k, e);
+      return a + (hash(id, 64+k, e+1) - a) * mix;
+    }
+    function place(out, pos, r, angle) {
+      const flex = smooth(.265, .46, r) * (1 - smooth(.78, 1.015, r));
+      const surge = Math.sin(3*angle + 5*r - .48*seconds);
+      const bend = .078*surge + .034*Math.sin(5*angle - 7*r + .37*seconds);
+      const direction = angle + flex*bend;
+      const radius = r + breath * (1 - smooth(.29, .98, r)) +
+        .020 * flex * Math.sin(4*angle - 6*r + .43*seconds);
+      out[pos] = radius * Math.cos(direction);
+      out[pos+1] = radius * Math.sin(direction);
+    }
+    return function sample(out, first, end) {
+      for (let id = first; id < end; id++) {
+        const loose = id >= bodyCount;
+        const radialSeed = hash(id, 88, 0), angularSeed = hash(id, 89, 0);
+        let r = Math.sqrt(.082 + radialSeed * .925);
+        let a = angularSeed + .0030 * (grainNoise(id,0) - .5) +
+          .0011 * bends(angularSeed + r * .04);
+        a -= Math.floor(a);
+        const angle = a * tau, cos = Math.cos(angle), sin = Math.sin(angle);
+        const deposit = id / bodyCount;
+        const low = deposit < .277 ? 7 : deposit < .671 ? 3 : 0;
+        const range = deposit < .277 ? 9 : deposit < .671 ? 8 : 6;
+        let scale = low + range * (.80 * hash(id,90,0) + .20 * grainNoise(id,2));
+        const pigment = grainNoise(id,4), mineral = hash(id,91,0);
+        let value;
+        if (loose) {
+          const inside = (id - bodyCount) / (count - bodyCount) < .157;
+          const drift = smooth(-.4,.78,glints(a)) * (.52 + .48 * strands(a));
+          const dist = -Math.log(Math.max(.00001, radialSeed)) *
+            (inside ? .0028 : .009 + .034 * drift) * (.84 + .32 * grainNoise(id,1));
+          r = inside ? pupil(a) - dist : 1 + dist;
+          const light = (.18 + (.84 * mineral + .16 * pigment) ** 3) * Math.exp(-dist * 13);
+          value = (inside ? 77 : 115 + (lx*80-29)*cos + (ly*80-22)*sin) * light;
+          scale = 10 * (.86 * hash(id,90,0) + .14 * grainNoise(id,2)) ** 2;
+        } else {
+          r += .009 * (grainNoise(id,1) - .5) + .002 * folds(a+r*.03);
+          value = shade(r, a, r*cos, r*sin);
+          const crystal = mineral + .045 * (grainNoise(id,5)-.5);
+          value *= (.70 + .46 * hash(id,92,0) + .12 * pigment) *
+            (.22 + .78 * smooth(.077,.115,crystal));
+          value += smooth(.958,.985,crystal) * (22 + 52*pigment) *
+            smooth(pupil(a), pupil(a)+.006, r) * (1-smooth(.995,1.001,r));
+        }
+        const pos = id * 5;
+        place(out, pos, r, angle);
+        out[pos+2] = Math.max(0,value) / 255;
+        out[pos+3] = (.38 + .17 * scale) * Math.sqrt(495900/count);
+        out[pos+4] = tau * hash(id,93,0) + .75 * (grainNoise(id,3)-.5) + .18 * grainNoise(id,6);
+      }
+      // Trace constant fiber coordinates through the same warp and flex as the grains.
+      if (end === count) {
+        for (let lane = 0; lane < routes; lane++) {
+          const target = (lane + .25 + .5 * hash(lane, 102, 0)) / routes;
+          let a = target;
+          for (let k = 0; k < knots; k++) {
+            const r = .36 + .57 * k / (knots-1);
+            for (let n = 0; n < 4; n++) a += .45 * (target - fiberWarp(r, a));
+            const kink = .008 * (hash(k, 110+lane, 0) - .5);
+            const pos = count*5 + 2*(lane*knots+k);
+            place(out, pos, r, a*tau + kink);
+          }
+        }
+      }
+    };
+  }
+  return prepare;
+}
+
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl', {
+  alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'low-power'
+});
+const count = gl ? 395000 : 162000;
+const stateLength = count*5 + 2*routeCount*knotsPerRoute;
+const interval = 1.6;
+const slices = [];
+let pixelRatio, side, renderer, nextTime = 0, requested = false, worker, localModel;
+let time = 0, previous = null, lastDraw = -Infinity, frame, dirty = true;
+
+// This map carries illumination only. The renderers apply it to each sand grain.
+const chargeSize = 768;
+const charge = new Uint8Array(chargeSize * chargeSize);
+function updateCurrents(a, b, mix, seconds) {
+  charge.fill(0);
+  const unit = chargeSize / 2.32;
+  function glow(x, y, intensity, width) {
+    const extent = width * 3;
+    for (let py = Math.floor(y-extent); py <= y+extent; py++) {
+      for (let px = Math.floor(x-extent); px <= x+extent; px++) {
+        const dx = px-x, dy = py-y, d = (dx*dx+dy*dy) / (width*width);
+        const value = intensity * (205*Math.exp(-1.4*d) + 50*Math.exp(-.20*d));
+        const i = py*chargeSize+px;
+        if (value > charge[i]) charge[i] = Math.round(value);
+      }
+    }
+  }
+  for (let stream = 0; stream < 3; stream++) {
+    const cycle = seconds / (1.97 + .29*stream) + .31*stream + .12;
+    const event = Math.floor(cycle), head = (cycle-event)*1.55;
+    const lane = (event*17 + stream*11 + 3) % routeCount;
+    const reverse = (event+stream) % 3 === 1;
+    const tail = .22 + .028*stream;
+    for (let u = Math.max(0, head-tail); u <= Math.min(1,head); u += .0018) {
+      const along = (reverse ? 1-u : u) * (knotsPerRoute-1);
+      const k = Math.min(knotsPerRoute-2,Math.floor(along)), f = along-k;
+      const i = count*5 + 2*(lane*knotsPerRoute+k);
+      const ax = a[i] + f*(a[i+2]-a[i]), ay = a[i+1] + f*(a[i+3]-a[i+1]);
+      const bx = b[i] + f*(b[i+2]-b[i]), by = b[i+1] + f*(b[i+3]-b[i+1]);
+      const x = ax + mix*(bx-ax), y = ay + mix*(by-ay);
+      const px = chargeSize/2+x*unit, py = chargeSize/2+y*unit;
+      const strength = (1-(head-u)/tail) ** .75 * Math.min(1, (1-u)*24, u*24);
+      glow(px, py, strength, 1.35);
+      // A short offshoot separates from the channel, fading towards its tip.
+      const fork = (u*3.5+lane*.27) % 1;
+      if (fork < .36) {
+        const spread = fork * (12 + 1.6*Math.sin(53*u+lane));
+        glow(px-y*spread, py+x*spread, .72*strength*(1-fork/.36), .92);
+      }
+    }
+  }
+}
+
+function gpuRenderer() {
+  function shader(type, source) {
+    const result = gl.createShader(type);
+    gl.shaderSource(result, source);
+    gl.compileShader(result);
+    if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) throw Error(gl.getShaderInfoLog(result));
+    return result;
+  }
+  const program = gl.createProgram();
+  gl.attachShader(program, shader(gl.VERTEX_SHADER, `
+    attribute vec2 positionA, positionB;
+    attribute vec3 facetA, facetB;
+    uniform float blend, unit;
+    varying mediump vec4 chip;
+    varying mediump vec2 uv;
+    void main() {
+      vec2 p = mix(positionA, positionB, blend);
+      vec3 f = mix(facetA, facetB, blend);
+      uv = .5 + p / 2.32;
+      gl_Position = vec4(p.x / 1.16, -p.y / 1.16, 0., 1.);
+      float radius = f.y * unit;
+      gl_PointSize = ceil(2. * radius + 1.5);
+      chip = vec4(f.x, radius, f.z, gl_PointSize);
+    }`));
+  gl.attachShader(program, shader(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    varying vec4 chip;
+    varying vec2 uv;
+    uniform sampler2D currentMap;
+    void main() {
+      vec2 p = (gl_PointCoord - .5) * chip.w;
+      vec2 dir = vec2(cos(chip.z), sin(chip.z));
+      float u = dot(p, dir);
+      float v = dot(p, vec2(-dir.y, dir.x)) / (.75 + .11 * cos(3. * chip.z));
+      float d = max(max(.95 * abs(u), .92 * abs(v)), .68 * abs(u) + .67 * abs(v));
+      float cover = clamp(chip.y + .49 - d, 0., 1.);
+      float face = .98 - .24 * (p.x + p.y) / (chip.y + .4)
+        + .17 * (1. - step(-.4 * chip.y, u-v));
+      float current = texture2D(currentMap, uv).r;
+      gl_FragColor = vec4(vec3((chip.x + 1.5*current) * face), cover);
+    }`));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program));
+  gl.useProgram(program);
+  const buffers = [gl.createBuffer(), gl.createBuffer(), gl.createBuffer()];
+  const resident = [];
+  const position = ['positionA','positionB'].map(name => gl.getAttribLocation(program,name));
+  const facet = ['facetA','facetB'].map(name => gl.getAttribLocation(program,name));
+  const unit = gl.getUniformLocation(program,'unit'), blend = gl.getUniformLocation(program,'blend');
+  const currentMap = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, currentMap);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, chargeSize, chargeSize, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.clearColor(6/255, 6/255, 6/255, 1);
+  return {
+    draw(a,b,mix) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, chargeSize, chargeSize, gl.LUMINANCE, gl.UNSIGNED_BYTE, charge);
+      gl.viewport((gl.drawingBufferWidth-side)/2, (gl.drawingBufferHeight-side)/2, side, side);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      [a,b].forEach((slice,i) => {
+        const slot = slice.sequence % buffers.length;
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers[slot]);
+        if (resident[slot] !== slice.sequence) {
+          gl.bufferData(gl.ARRAY_BUFFER, slice.data, gl.DYNAMIC_DRAW);
+          resident[slot] = slice.sequence;
+        }
+        gl.enableVertexAttribArray(position[i]);
+        gl.enableVertexAttribArray(facet[i]);
+        gl.vertexAttribPointer(position[i], 2, gl.FLOAT, false, 20, 0);
+        gl.vertexAttribPointer(facet[i], 3, gl.FLOAT, false, 20, 8);
+      });
+      gl.uniform1f(unit, side/1100);
+      gl.uniform1f(blend, mix);
+      gl.drawArrays(gl.POINTS, 0, count);
+    }
+  };
+}
+
+// The 2D path uses the same evolving particles and facet lighting as the GPU.
+function softwareRenderer() {
+  const context = canvas.getContext('2d', { alpha: false });
+  let size, pixels, gray, stamps, radiusStep, subpixels;
+  function prepareStamps() {
+    size = side;
+    pixels = context.createImageData(size,size);
+    radiusStep = Math.max(1, size/1056) / 4;
+    subpixels = size > 1056 ? 2 : 4;
+    gray = new Uint8ClampedArray(size * size);
+    stamps = new Map();
+  }
+  function stamp(radius, turn, subX, subY) {
+    const key = (((radius * 16 + turn) * 4 + subX) * 4 + subY);
+    if (stamps.has(key)) return stamps.get(key);
+    const points = [], rad = radius * radiusStep;
+    const angle = turn * Math.PI / 8, c = Math.cos(angle), s = Math.sin(angle);
+    const aspect = .75 + .11 * Math.cos(3*angle), extent = Math.ceil(rad+1);
+    for (let y = -extent; y <= extent; y++) for (let x = -extent; x <= extent; x++) {
+      const dx = x - subX/subpixels, dy = y - subY/subpixels;
+      const u = dx*c + dy*s, v = (dy*c - dx*s) / aspect;
+      const d = Math.max(.95*Math.abs(u), .92*Math.abs(v), .68*Math.abs(u)+.67*Math.abs(v));
+      const coverage = Math.min(1,rad+.49-d);
+      if (coverage <= 0) continue;
+      const face = .98 - .24*(dx+dy)/(rad+.4) + (u-v < -.4*rad ? .17 : 0);
+      points.push(y*size+x, coverage, face*coverage);
+    }
+    const stampData = new Float32Array(points);
+    stamps.set(key,stampData);
+    return stampData;
+  }
+  return {
+    draw(left,right,m) {
+      if (size !== side) prepareStamps();
+      gray.fill(6);
+      const a = left.data, b = right.data, R = size/2.32, center = size/2;
+      const border = Math.ceil(5*size/1000) + 2;
+      for (let i = 0; i < count*5; i += 5) {
+        const x = (a[i]+(b[i]-a[i])*m)*R+center, y = (a[i+1]+(b[i+1]-a[i+1])*m)*R+center;
+        if (x<border || y<border || x>=size-border || y>=size-border) continue;
+        const u = x*chargeSize/size-.5, v = y*chargeSize/size-.5;
+        const col = Math.floor(u), row = Math.floor(v), idx = row*chargeSize+col;
+        const top = charge[idx] + (u-col)*(charge[idx+1]-charge[idx]);
+        const below = charge[idx+chargeSize] + (u-col)*(charge[idx+chargeSize+1]-charge[idx+chargeSize]);
+        const light = 255*(a[i+2]+(b[i+2]-a[i+2])*m) + 1.5*(top+(v-row)*(below-top));
+        const radius = Math.max(1,Math.round((a[i+3]+(b[i+3]-a[i+3])*m)*size/(1100*radiusStep)));
+        const turn = Math.round((a[i+4]+(b[i+4]-a[i+4])*m)*8/Math.PI) & 15;
+        const qx = Math.round(subpixels*x), qy = Math.round(subpixels*y);
+        const kernel = stamp(radius,turn,qx%subpixels,qy%subpixels);
+        const base = Math.floor(qy/subpixels)*size + Math.floor(qx/subpixels);
+        for (let k = 0; k < kernel.length; k += 3) {
+          const idx = base+kernel[k];
+          gray[idx] += light*kernel[k+2] - gray[idx]*kernel[k+1];
+        }
+      }
+      const rgba = new Uint32Array(pixels.data.buffer);
+      for (let i = 0; i < gray.length; i++) rgba[i] = 0xff000000 | gray[i]*0x010101;
+
+      context.fillStyle = '#060606';
+      context.fillRect(0,0,canvas.width,canvas.height);
+      context.putImageData(pixels,Math.floor((canvas.width-side)/2),Math.floor((canvas.height-side)/2));
+    }
+  };
+}
+
+function resize() {
+  pixelRatio = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1,Math.round(innerWidth*pixelRatio));
+  canvas.height = Math.max(1,Math.round(innerHeight*pixelRatio));
+  side = gl ? Math.min(gl.drawingBufferWidth, gl.drawingBufferHeight) : Math.min(canvas.width, canvas.height);
+  dirty = true;
+  wake();
+}
+function accept(data) {
+  requested = false;
+  slices.push({time: nextTime, sequence: Math.round(nextTime/interval), data});
+  nextTime += interval;
+  dirty = true;
+  wake();
+}
+
+// Compute temporal samples ahead of playback. Display frames interpolate each
+// grain's position, value, radius and orientation before rasterization.
+function requestSlice() {
+  if (requested || slices.length >= 3 || document.hidden) return;
+  requested = true;
+  if (worker) {
+    worker.postMessage(nextTime);
+    return;
+  }
+  localModel ||= createModel(count, routeCount, knotsPerRoute);
+  const sample = localModel(nextTime), data = new Float32Array(stateLength);
+  let i = 0;
+  function chunk() {
+    const until = performance.now()+6;
+    do {
+      const end = Math.min(count,i+1500);
+      sample(data,i,end);
+      i = end;
+    } while (i<count && performance.now()<until);
+    if (i<count) setTimeout(chunk,0);
+    else accept(data);
+  }
+  chunk();
+}
+function wake() {
+  if (frame == null && !document.hidden && !(gl && gl.isContextLost()))
+    frame = requestAnimationFrame(animate);
+}
+function animate(now) {
+  frame = null;
+  if (pixelRatio !== (window.devicePixelRatio || 1)) resize();
+  const moving = slices.length > 1;
+  if (moving && previous !== null) {
+    time = Math.min(slices[slices.length-1].time, time + (now-previous)/1000);
+    while (slices.length > 1 && time >= slices[1].time) slices.shift();
+  }
+  previous = slices.length > 1 ? now : null;
+  if (slices.length && (dirty || (moving && now-lastDraw >= 1000/30-1))) {
+    const a = slices[0], b = slices[1] || a;
+    const mix = Math.max(0, Math.min(1,(time-a.time)/interval));
+    updateCurrents(a.data, b.data, mix, time);
+    renderer.draw(a,b,mix);
+    lastDraw = now;
+    dirty = false;
+  }
+  requestSlice();
+  if (moving) wake();
+}
+
+renderer = gl ? gpuRenderer() : softwareRenderer();
+try {
+  const source = 'const prepare = (' + createModel.toString() + ')(' + [count,routeCount,knotsPerRoute].join(',') + ');' +
+    'onmessage = ({data: t}) => {const out = new Float32Array(' + stateLength + ');' +
+    'prepare(t)(out,0,' + count + '); postMessage(out,[out.buffer]);};';
+  const url = URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
+  try { worker = new Worker(url); } finally { URL.revokeObjectURL(url); }
+  worker.onmessage = event => accept(event.data);
+  worker.onerror = () => {
+    worker.terminate();
+    worker = null;
+    requested = false;
+    wake();
+  };
+} catch { worker = null; }
+function resume() {
+  cancelAnimationFrame(frame);
+  frame = null;
+  previous = null;
+  dirty = true;
+  wake();
+}
+canvas.addEventListener('webglcontextlost', event => {
+  event.preventDefault();
+  resume();
+});
+canvas.addEventListener('webglcontextrestored', () => {
+  renderer = gpuRenderer();
+  resume();
+});
+window.addEventListener('resize',resize);
+document.addEventListener('visibilitychange',resume);
+resize();
+</script>
+</body>
+</html>
