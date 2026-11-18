@@ -147,12 +147,14 @@
         onSelect: function (n) { setPromptStage(prompt, n, true); },
       });
       this.stagePrompt = el("p", { className: "tile-stage-prompt" });
+      this.stageNote = el("p", { className: "tile-stage-note" });
       stageRow = el("div", { className: "tile-stage" }, [
         el("div", { className: "tile-stage-head" }, [
           this.stageTitle = el("span", { className: "tile-stage-title" }),
           this.picker.node,
         ]),
         this.stagePrompt,
+        this.stageNote,
       ]);
     }
 
@@ -199,6 +201,9 @@
       this.picker.set(n);
       this.stageTitle.textContent = stageName(this.prompt, n);
       this.stagePrompt.textContent = s.prompt;
+      var note = (this.entry.stageNotes || {})[n] || "";
+      this.stageNote.textContent = note;
+      this.stageNote.hidden = !note;
     }
     this.unload();
     this.maybeLoad();

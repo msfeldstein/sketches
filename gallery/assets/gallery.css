@@ -319,3 +319,11 @@ code {
 }
 
 .btn:disabled, .btn.disabled { opacity: 0.4; pointer-events: none; }
+
+.tile-stage-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #e7c98a;
+}
+.tile-stage-note[hidden] { display: none; }
