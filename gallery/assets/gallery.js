@@ -68,13 +68,12 @@
     return "Stage " + n + (s.label ? " · " + s.label : "");
   }
 
-  // Stage picker shared by tiles and the per-prompt "all tiles" control.
-  // onSelect(n) is called with a 1-based stage number.
+  // Stage picker used by both the per-prompt control and each tile. All pickers in a
+  // prompt drive the same shared stage. onSelect(n) gets a 1-based stage number.
   function StagePicker(prompt, opts) {
     var self = this;
     this.count = prompt.stages.length;
     this.onSelect = opts.onSelect;
-    this.isAvailable = opts.isAvailable || function () { return true; };
     this.prev = el("button", { className: "stage-step", type: "button", "aria-label": "Previous stage", text: "‹" });
     this.next = el("button", { className: "stage-step", type: "button", "aria-label": "Next stage", text: "›" });
     this.prev.addEventListener("click", function () { self.step(-1); });
@@ -88,7 +87,6 @@
         el("span", { className: "stage-num", text: String(n) }),
         opts.compact ? null : el("span", { className: "stage-label", text: s.label || "" }),
       ]);
-      if (!self.isAvailable(n)) { tab.disabled = true; tab.title += " (no sketch)"; }
       tab.addEventListener("click", function () { self.onSelect(n); });
       return tab;
     });
@@ -98,8 +96,7 @@
   }
 
   StagePicker.prototype.step = function (dir) {
-    var n = this.current || 1;
-    do { n += dir; } while (n >= 1 && n <= this.count && !this.isAvailable(n));
+    var n = (this.current || 1) + dir;
     if (n >= 1 && n <= this.count) this.onSelect(n);
   };
 
@@ -147,8 +144,7 @@
       this.picker = new StagePicker(prompt, {
         compact: true,
         ariaLabel: "Stage for " + this.label,
-        isAvailable: function (n) { return self.hasStage(n); },
-        onSelect: function (n) { self.setStage(n); updateGroupPicker(prompt); },
+        onSelect: function (n) { setPromptStage(prompt, n, true); },
       });
       this.stagePrompt = el("p", { className: "tile-stage-prompt" });
       stageRow = el("div", { className: "tile-stage" }, [
@@ -233,21 +229,13 @@
 
   var groups = {};
 
-  // The group picker shows a stage as active only when every tile is on it.
-  function updateGroupPicker(prompt) {
+  function setPromptStage(prompt, n, updateUrl) {
     var g = groups[prompt.id];
-    if (!g) return;
-    var first = g.tiles[0].stageNum;
-    var same = g.tiles.every(function (t) { return t.stageNum === first; });
-    g.picker.set(same ? first : null);
-    g.prompt.textContent = same ? prompt.stages[first - 1].prompt : "Tiles are on different stages.";
-    g.title.textContent = same ? stageName(prompt, first) : "Mixed stages";
-  }
-
-  function setGroupStage(prompt, n, updateUrl) {
-    var g = groups[prompt.id];
+    g.stage = n;
     g.tiles.forEach(function (t) { t.setStage(n); });
-    updateGroupPicker(prompt);
+    g.picker.set(n);
+    g.title.textContent = stageName(prompt, n);
+    g.prompt.textContent = prompt.stages[n - 1].prompt;
     if (updateUrl) {
       if (n === 1) params.delete(prompt.id); else params.set(prompt.id, String(n));
       var qs = params.toString();
@@ -275,13 +263,13 @@
     if (multi) {
       var g = groups[prompt.id] = { tiles: promptTiles };
       g.picker = new StagePicker(prompt, {
-        ariaLabel: "Stage for all " + prompt.title + " tiles",
-        onSelect: function (n) { setGroupStage(prompt, n, true); },
+        ariaLabel: "Stage for " + prompt.title,
+        onSelect: function (n) { setPromptStage(prompt, n, true); },
       });
       g.title = el("span", { className: "prompt-label" });
       g.prompt = el("span");
       head.appendChild(el("div", { className: "group-stage" }, [
-        el("span", { className: "group-stage-caption", text: "All tiles" }),
+        el("span", { className: "group-stage-caption", text: "Stage" }),
         g.picker.node,
       ]));
       head.appendChild(el("p", { className: "prompt" }, [g.title, g.prompt]));
@@ -294,7 +282,7 @@
 
     promptsEl.appendChild(el("section", { className: "round", id: prompt.id }, [head, grid]));
 
-    if (multi) setGroupStage(prompt, clampStage(prompt, params.get(prompt.id)), false);
+    if (multi) setPromptStage(prompt, clampStage(prompt, params.get(prompt.id)), false);
     else promptTiles.forEach(function (t) { t.setStage(1); });
   }
 
