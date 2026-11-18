@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sand Iris</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #060505; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c" title="click for a new iris"></canvas>
+<script>
+(() => {
+'use strict';
+
+const TAU = Math.PI * 2;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// ---------- utilities ----------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+function smooth(a, b, x) { let t = (x - a) / (b - a); t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+const sq = x => x * x;
+
+// Periodic 1D value noise over the angle, and 2D noise periodic in angle.
+function ptable(period, rnd) { const t = new Float32Array(period); for (let i = 0; i < period; i++) t[i] = rnd(); return t; }
+function pn(t, th) {
+  const n = t.length; const x = th / TAU * n;
+  const xf = Math.floor(x); let f = x - xf;
+  const i = ((xf % n) + n) % n; const j = (i + 1) % n;
+  f = f * f * (3 - 2 * f);
+  return t[i] + (t[j] - t[i]) * f;
+}
+function p2table(px, py, rnd) { const t = new Float32Array(px * py); for (let i = 0; i < t.length; i++) t[i] = rnd(); t.px = px; t.py = py; return t; }
+function p2(t, th, v) {
+  const px = t.px, py = t.py;
+  const x = th / TAU * px;
+  const xf = Math.floor(x), yf = Math.floor(v);
+  let fx = x - xf, fy = v - yf;
+  const i0 = ((xf % px) + px) % px, i1 = (i0 + 1) % px;
+  const j0 = ((yf % py) + py) % py, j1 = (j0 + 1) % py;
+  fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+  const a = t[j0 * px + i0], b = t[j0 * px + i1], c = t[j1 * px + i0], d = t[j1 * px + i1];
+  const top = a + (b - a) * fx, bot = c + (d - c) * fx;
+  return top + (bot - top) * fy;
+}
+function angDiff(a, b) { let d = a - b; d -= TAU * Math.round(d / TAU); return d; }
+
+// ---------- palettes ----------
+const PALETTES = [
+  { // silver: pale fibrous stroma, dark pupillary zone, bright collarette
+    outer: [120, 120, 120], inner: [80, 80, 80], light: [236, 236, 236], coll: [250, 250, 250],
+    dark: [4, 4, 4], limbal: [6, 6, 6], ruff: [20, 20, 20], freckle: [26, 26, 26], alt: [92, 92, 92]
+  },
+  { // graphite: dark stroma with luminous strands
+    outer: [64, 64, 64], inner: [128, 128, 128], light: [226, 226, 226], coll: [200, 200, 200],
+    dark: [2, 2, 2], limbal: [4, 4, 4], ruff: [16, 16, 16], freckle: [12, 12, 12], alt: [40, 40, 40]
+  },
+  { // chalk: bright and stark
+    outer: [168, 168, 168], inner: [96, 96, 96], light: [255, 255, 255], coll: [255, 255, 255],
+    dark: [6, 6, 6], limbal: [8, 8, 8], ruff: [24, 24, 24], freckle: [30, 30, 30], alt: [130, 130, 130]
+  }
+];
+
+// ---------- iris pattern ----------
+let P, T = {}, crypts = [], freckles = [];
+let colR, colG, colB, colDens; // outputs of irisColor
+
+function setupPattern(rnd) {
+  T.coll1 = ptable(9, rnd); T.coll2 = ptable(23, rnd); T.coll3 = ptable(90, rnd);
+  T.f180 = ptable(180, rnd); T.f420 = ptable(420, rnd); T.f90 = ptable(90, rnd);
+  T.warp = p2table(16, 8, rnd);
+  T.along = p2table(140, 24, rnd);
+  T.spike1 = ptable(52, rnd); T.spike2 = ptable(15, rnd);
+  T.patch = p2table(9, 6, rnd);
+  T.fine = ptable(760, rnd); T.fine2 = ptable(260, rnd);
+  T.furrowPos = ptable(15, rnd); T.furrowMask = ptable(22, rnd);
+  T.ruff = ptable(150, rnd); T.ruffR = ptable(60, rnd);
+  T.edge = ptable(30, rnd);
+  T.limbBand = ptable(70, rnd);
+
+  crypts = [];
+  const nInner = 22 + Math.floor(rnd() * 14);
+  for (let i = 0; i < nInner; i++) {
+    const th = rnd() * TAU;
+    const c = collR(th);
+    crypts.push({ th, u: c + 0.015 + rnd() * 0.13, lu: 0.03 + rnd() * 0.06, lt: 0.018 + rnd() * 0.04, depth: 0.8 + rnd() * 0.2 });
+  }
+  const nOuter = 18 + Math.floor(rnd() * 16);
+  for (let i = 0; i < nOuter; i++) {
+    const th = rnd() * TAU;
+    crypts.push({ th, u: 0.62 + rnd() * 0.28, lu: 0.012 + rnd() * 0.03, lt: 0.01 + rnd() * 0.022, depth: 0.25 + rnd() * 0.35 });
+  }
+  freckles = [];
+  const nf = Math.floor(rnd() * 5);
+  for (let i = 0; i < nf; i++) {
+    freckles.push({ th: rnd() * TAU, u: 0.5 + rnd() * 0.35, r: 0.012 + rnd() * 0.025 });
+  }
+}
+
+function collR(th) {
+  return 0.29 + 0.075 * (pn(T.coll1, th) - 0.5) + 0.04 * (pn(T.coll2, th) - 0.5) + 0.026 * (pn(T.coll3, th) - 0.5);
+}
+
+// u: 0 at pupil margin, 1 at limbus. Writes colR/G/B (0..255) and colDens (0..1).
+function irisColor(u, th, cs, sn) {
+  const c = collR(th);
+  const w = p2(T.warp, th, u * 3) - 0.5;
+  const thw = th + w * 0.055 + u * 0.03;
+  const thw2 = th + w * 0.09 - u * 0.025;
+  let F = 0.55 * pn(T.f180, thw) + 0.45 * pn(T.f420, thw2);
+  const along = p2(T.along, thw, u * 11);
+  F = F * 0.72 + along * 0.28;
+  const strand = smooth(0.55, 0.7, F);
+  const gap = smooth(0.45, 0.31, F);
+
+  const spikes = pn(T.spike1, th) * 0.7 + pn(T.spike2, th) * 0.3;
+  const sp = Math.pow(spikes, 2.6);
+  const tOuter = smooth(c - 0.06, c + 0.03 + 0.4 * sp, u);
+
+  let r = P.inner[0] + (P.outer[0] - P.inner[0]) * tOuter;
+  let g = P.inner[1] + (P.outer[1] - P.inner[1]) * tOuter;
+  let b = P.inner[2] + (P.outer[2] - P.inner[2]) * tOuter;
+
+  // large soft patches of hue drift
+  const pv = p2(T.patch, th, u * 2.2) - 0.5;
+  const am = clamp01(pv * 1.6) * tOuter * 0.6;
+  r += (P.alt[0] - r) * am; g += (P.alt[1] - g) * am; b += (P.alt[2] - b) * am;
+  const pl = 1 + (pv < 0 ? pv * 0.4 : 0);
+  r *= pl; g *= pl; b *= pl;
+
+  // radial fibres (trabeculae)
+  const fs = 0.55 + 0.45 * tOuter;
+  const lm = strand * 0.78 * fs;
+  r += (P.light[0] - r) * lm; g += (P.light[1] - g) * lm; b += (P.light[2] - b) * lm;
+  const dk = 1 - gap * 0.8 * fs;
+  r *= dk; g *= dk; b *= dk;
+
+  // fine striations in the pupillary zone
+  const inner = 1 - tOuter;
+  if (inner > 0.01) {
+    const fz = 0.6 * pn(T.fine, th + w * 0.04) + 0.4 * pn(T.fine2, th - w * 0.03);
+    const m = 1 + (fz - 0.5) * 0.7 * inner;
+    r *= m; g *= m; b *= m;
+  }
+
+  // collarette: a raised, zig-zag ridge with a shadow on its outer flank
+  const ridgeTex = 0.25 + 1.0 * pn(T.f90, th + w * 0.02);
+  const ridge = Math.exp(-sq((u - c) / 0.022)) * ridgeTex;
+  const rm = clamp01(ridge * 0.85);
+  r += (P.coll[0] - r) * rm; g += (P.coll[1] - g) * rm; b += (P.coll[2] - b) * rm;
+  const sh = 1 - 0.62 * Math.exp(-sq((u - c - 0.038) / 0.02));
+  r *= sh; g *= sh; b *= sh;
+
+  // darker near the pupil margin
+  const pm = 0.62 + 0.38 * smooth(0.0, 0.13, u);
+  r *= pm; g *= pm; b *= pm;
+
+  // contraction furrows
+  const rings = [0.6, 0.7, 0.8, 0.885];
+  for (let k = 0; k < 4; k++) {
+    const rr = rings[k] + 0.024 * (pn(T.furrowPos, th + rings[k] * 7) - 0.5);
+    const mask = smooth(0.38, 0.62, pn(T.furrowMask, th + rings[k] * 3.1));
+    const f = Math.exp(-sq((u - rr) / 0.0065)) * mask;
+    const hl = Math.exp(-sq((u - rr + 0.012) / 0.006)) * mask;
+    const fm = (1 - 0.55 * f) * (1 + 0.2 * hl);
+    r *= fm; g *= fm; b *= fm;
+  }
+
+  // crypts (lacunae)
+  let kd = 0, rim = 0;
+  for (let k = 0; k < crypts.length; k++) {
+    const cr = crypts[k];
+    const du = (u - cr.u) / cr.lu;
+    if (du < -1.4 || du > 1.4) continue;
+    const dth = angDiff(th, cr.th);
+    const lt = cr.lt * (1 - 0.45 * du);
+    if (Math.abs(dth) > lt * 1.5) continue;
+    const dd = du * du + sq(dth / lt);
+    const d = smooth(1.0, 0.45, dd) * cr.depth;
+    if (d > kd) kd = d;
+    const rv = Math.exp(-sq((dd - 1.05) / 0.2)) * cr.depth;
+    if (rv > rim) rim = rv;
+  }
+  if (kd > 0 || rim > 0) {
+    const deep = 0.6 + 0.8 * F;
+    const m = kd * 0.97;
+    r += (P.dark[0] * deep - r) * m; g += (P.dark[1] * deep - g) * m; b += (P.dark[2] * deep - b) * m;
+    const rm2 = 1 + rim * 0.5 * (1 - kd);
+    r *= rm2; g *= rm2; b *= rm2;
+  }
+
+  // freckles (nevi)
+  for (let k = 0; k < freckles.length; k++) {
+    const fr = freckles[k];
+    const d = sq((u - fr.u) / fr.r) + sq(angDiff(th, fr.th) * (0.3 + 0.7 * u) / fr.r);
+    if (d < 1.6) {
+      const m = smooth(1.6, 0.4, d) * 0.85;
+      r += (P.freckle[0] - r) * m; g += (P.freckle[1] - g) * m; b += (P.freckle[2] - b) * m;
+    }
+  }
+
+  // pupillary ruff: crinkled dark-brown beads at the pupil margin
+  const ruffW = 0.026 + 0.014 * pn(T.ruffR, th);
+  if (u < ruffW + 0.012) {
+    const bead = 0.55 + 0.8 * pn(T.ruff, th);
+    const m = smooth(ruffW + 0.012, ruffW - 0.006, u);
+    r += (P.ruff[0] * bead - r) * m; g += (P.ruff[1] * bead - g) * m; b += (P.ruff[2] * bead - b) * m;
+  }
+
+  // limbal ring
+  const edge = 1 + 0.014 * (pn(T.edge, th) - 0.5);
+  const lim = smooth(0.78, edge, u) * (0.82 + 0.18 * pn(T.limbBand, th));
+  r += (P.limbal[0] - r) * lim; g += (P.limbal[1] - g) * lim; b += (P.limbal[2] - b) * lim;
+  let dens = 1 - kd * 0.35;
+  if (u > edge) {
+    const fo = smooth(edge, edge + 0.075, u);
+    r *= 1 - fo * 0.4; g *= 1 - fo * 0.4; b *= 1 - fo * 0.4;
+    dens *= 1 - fo * 0.85;
+  }
+
+  // gentle light from the upper left
+  const ld = -0.6 * cs - 0.8 * sn;
+  const L = Math.max(0.15, 1 + 0.36 * ld * (0.35 + 0.65 * u));
+  colR = r * L; colG = g * L; colB = b * L; colDens = dens;
+}
+
+// ---------- particle buffers ----------
+let W = 0, H = 0, dpr = 1, R = 0, cx = 0, cy = 0;
+let img, buf;
+let N = 0, KIND, SIZE, PHASE, A, CS, SN, DEL, COL;
+let kernels;
+const PUPIL0 = 0.3;          // nominal pupil radius, as a fraction of iris radius
+const SINT = new Float32Array(256);
+for (let i = 0; i < 256; i++) SINT[i] = Math.sin(i / 256 * TAU);
+const BG = (255 << 24) | (2 << 16) | (2 << 8) | 2;
+
+// High-contrast S-curve with a soft posterize for a graphic, print-like look.
+function tone(v) {
+  let l = clamp01(v / 255);
+  l = Math.pow(l, 1.15);
+  l = l * l * (3 - 2 * l) * 0.75 + l * 0.25;
+  const q = Math.round(l * 9) / 9;
+  l = l * 0.6 + q * 0.4;
+  return l * 255;
+}
+
+function pack(r, g, b) {
+  r = r < 0 ? 0 : r > 255 ? 255 : r | 0;
+  g = g < 0 ? 0 : g > 255 ? 255 : g | 0;
+  b = b < 0 ? 0 : b > 255 ? 255 : b | 0;
+  return (255 << 24) | (b << 16) | (g << 8) | r;
+}
+
+function buildKernels() {
+  // [dx, dy, shade] with shade 0 = base, 1 = lit, 2 = shadow (light from top-left)
+  const defs = [
+    null,
+    [[0, 0, 0]],
+    [[0, 0, 1], [1, 0, 0], [0, 1, 0], [1, 1, 2]],
+    [[1, 0, 1], [0, 1, 1], [1, 1, 0], [2, 1, 2], [1, 2, 2]],
+    [[1, 0, 1], [2, 0, 1], [0, 1, 1], [1, 1, 1], [2, 1, 0], [3, 1, 0],
+     [0, 2, 0], [1, 2, 0], [2, 2, 0], [3, 2, 2], [1, 3, 2], [2, 3, 2]]
+  ];
+  kernels = defs.map(d => d && { off: Int32Array.from(d.map(k => k[1] * W + k[0])), sh: Uint8Array.from(d.map(k => k[2])) });
+}
+const COVER = [0, 1, 4, 5, 12];
+
+function grainSize(rnd) {
+  const s = Math.round(dpr * (0.72 + Math.pow(rnd(), 3) * 1.7));
+  return s < 1 ? 1 : s > 4 ? 4 : s;
+}
+
+function generate(seed, paletteIndex) {
+  const rnd = mulberry32(seed);
+  P = PALETTES[paletteIndex];
+  setupPattern(rnd);
+
+  let avgCover = 0;
+  for (let i = 0; i < 2000; i++) avgCover += COVER[grainSize(rnd)];
+  avgCover /= 2000;
+
+  const rOut = 1.09;
+  const irisArea = Math.PI * R * R * (rOut * rOut - PUPIL0 * PUPIL0);
+  const pupilArea = Math.PI * sq(R * PUPIL0);
+  const nIris = Math.floor(irisArea * 1.35 / avgCover);
+  const nPupil = Math.floor(pupilArea * 1.4 / avgCover);
+  const nBg = Math.floor(Math.max(0, W * H - Math.PI * R * R) * 0.5 / avgCover);
+  const cl = { x: -0.2, y: -0.235, a: 0.1, b: 0.078 };
+  const nCatch = Math.floor(Math.PI * cl.a * cl.b * R * R * 1.6 / avgCover) + Math.floor(Math.PI * sq(0.022 * R) * 1.4 / avgCover);
+  const cap = nIris + nPupil + nBg + nCatch;
+
+  KIND = new Uint8Array(cap); SIZE = new Uint8Array(cap); PHASE = new Uint8Array(cap);
+  A = new Float32Array(cap); CS = new Float32Array(cap); SN = new Float32Array(cap);
+  DEL = new Float32Array(cap); COL = new Uint32Array(cap * 3);
+  let n = 0;
+
+  function push(kind, a, th, r, g, b, delay) {
+    const s = grainSize(rnd);
+    // per-grain variation: brightness, slight per-channel tint, stray mineral grains
+    let lum = 0.8 + rnd() * 0.4;
+    let v = (0.3 * r + 0.59 * g + 0.11 * b) * lum + (rnd() - 0.5) * 10;
+    const m = rnd();
+    if (kind !== 3) {
+      if (m < 0.035) v += (240 - v) * 0.35;
+      else if (m < 0.065) v *= 0.45;
+    }
+    v = tone(v);
+    r = g = b = v;
+    KIND[n] = kind; SIZE[n] = s; PHASE[n] = (rnd() * 256) | 0;
+    A[n] = a; CS[n] = Math.cos(th); SN[n] = Math.sin(th); DEL[n] = delay;
+    COL[n * 3] = pack(r, g, b);
+    COL[n * 3 + 1] = pack(r * 1.28 + 10, g * 1.28 + 10, b * 1.28 + 10);
+    COL[n * 3 + 2] = pack(r * 0.6, g * 0.6, b * 0.6);
+    n++;
+  }
+
+  // background sand: dark, with a faint cool halo around the limbus
+  for (let i = 0; i < nBg; i++) {
+    const x = rnd() * W, y = rnd() * H;
+    const dx = x - cx, dy = y - cy;
+    const d = Math.sqrt(dx * dx + dy * dy) / R;
+    if (d < 0.99) continue;
+    const vig = 1 - 0.85 * smooth(1.2, Math.hypot(W, H) * 0.5 / R, d);
+    const halo = smooth(1.5, 1.03, d);
+    const t = rnd();
+    const lit = Math.max(0, -0.6 * dx - 0.8 * dy) / (d * R);
+    const r = (6 + t * 9) * vig + halo * (6 + 26 * lit);
+    const g = r, b = r;
+    push(2, d, Math.atan2(dy, dx), r, g, b, rnd() * 0.8);
+  }
+
+  // iris
+  for (let i = 0; i < nIris; i++) {
+    const rr = Math.sqrt(rnd() * (rOut * rOut - PUPIL0 * PUPIL0) + PUPIL0 * PUPIL0);
+    const u = (rr - PUPIL0) / (1 - PUPIL0);
+    const th = rnd() * TAU;
+    const cs = Math.cos(th), sn = Math.sin(th);
+    irisColor(u, th, cs, sn);
+    if (colDens < 1 && rnd() > colDens) continue;
+    push(0, u, th, colR, colG, colB, 0.25 + rnd() * 0.7 + (1 - Math.min(u, 1)) * 0.5);
+  }
+
+  // pupil: near-black grains with a faint corneal sheen
+  for (let i = 0; i < nPupil; i++) {
+    const a = Math.sqrt(rnd());
+    const th = rnd() * TAU;
+    const cs = Math.cos(th), sn = Math.sin(th);
+    const sheen = Math.max(0, -0.6 * cs - 0.8 * sn) * a;
+    const edge = smooth(0.9, 1.0, a);
+    let r = 5 + sheen * 14, g = r, b = r;
+    r += (P.ruff[0] * 0.45 - r) * edge; g += (P.ruff[1] * 0.45 - g) * edge; b += (P.ruff[2] * 0.45 - b) * edge;
+    push(1, a, th, r, g, b, 0.9 + rnd() * 0.7);
+  }
+
+  // catchlights: soft-edged rounded window plus a small secondary glint
+  const nMain = Math.floor(Math.PI * cl.a * cl.b * R * R * 1.6 / avgCover);
+  for (let i = 0; i < nMain; i++) {
+    const x = (rnd() * 2 - 1) * cl.a * 1.25, y = (rnd() * 2 - 1) * cl.b * 1.25;
+    const d = Math.pow(Math.pow(Math.abs(x / cl.a), 2.6) + Math.pow(Math.abs(y / cl.b), 2.6), 1 / 2.6);
+    if (rnd() > smooth(1.2, 0.55, d) * 0.92) continue;
+    const px = cl.x + x, py = cl.y + y;
+    const v = 0.72 + 0.28 * smooth(1.1, 0.2, d);
+    push(3, Math.hypot(px, py), Math.atan2(py, px), 255 * v, 255 * v, 255 * v, 1.6 + rnd() * 0.5);
+  }
+  const nSmall = nCatch - nMain;
+  for (let i = 0; i < nSmall; i++) {
+    const a = Math.sqrt(rnd()) * 0.022, t = rnd() * TAU;
+    const px = 0.16 + Math.cos(t) * a, py = 0.205 + Math.sin(t) * a;
+    if (rnd() > smooth(0.022, 0.012, a)) continue;
+    push(3, Math.hypot(px, py), Math.atan2(py, px), 215, 215, 215, 1.8 + rnd() * 0.5);
+  }
+
+  N = n;
+}
+
+// ---------- rendering ----------
+let seed = 7, paletteIndex = 0, t0 = performance.now(), introLen = 3.4, playIntro = true;
+
+function frame(now) {
+  const t = (now - t0) / 1000;
+  const intro = playIntro && t < introLen;
+  buf.fill(BG);
+
+  const pR = R * PUPIL0 * (1 + 0.055 * Math.sin(t * 0.55) + 0.025 * Math.sin(t * 1.63 + 1.3));
+  const span = R - pR;
+  const amp = 0.38 * dpr;
+  const tt = (t * 18) | 0;
+  const Wm = W - 5, Hm = H - 5;
+  const ko = kernels;
+
+  for (let i = 0; i < N; i++) {
+    const k = KIND[i], a = A[i];
+    let r = k === 0 ? pR + a * span : k === 1 ? a * pR : a * R;
+    let c = CS[i], s = SN[i];
+    if (intro) {
+      let e = (t - DEL[i]) / 1.7;
+      if (e <= 0) continue;
+      if (e < 1) {
+        const ie = 1 - e; const q = ie * ie * ie;
+        const o = q * 2.4;
+        const co = Math.cos(o), so = Math.sin(o);
+        const nc = c * co - s * so; s = c * so + s * co; c = nc;
+        r *= 1 + q * 0.7;
+      }
+    }
+    const ph = PHASE[i];
+    const x = (cx + r * c + amp * SINT[(ph + tt) & 255] + 0.5) | 0;
+    const y = (cy + r * s + amp * SINT[(ph * 7 + tt + 64) & 255] + 0.5) | 0;
+    if (x < 0 || y < 0 || x > Wm || y > Hm) continue;
+    const kern = ko[SIZE[i]];
+    const p = y * W + x, ci = i * 3;
+    const off = kern.off, sh = kern.sh;
+    for (let j = 0; j < off.length; j++) buf[p + off[j]] = COL[ci + sh[j]];
+  }
+  ctx.putImageData(img, 0, 0);
+  requestAnimationFrame(frame);
+}
+
+function resize(keepIntro) {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(16, Math.floor(window.innerWidth * dpr));
+  H = Math.max(16, Math.floor(window.innerHeight * dpr));
+  canvas.width = W; canvas.height = H;
+  cx = W / 2; cy = H / 2;
+  R = Math.min(W, H) * 0.44;
+  img = ctx.createImageData(W, H);
+  buf = new Uint32Array(img.data.buffer);
+  buildKernels();
+  generate(seed, paletteIndex);
+  if (!keepIntro) playIntro = false;
+}
+
+let resizeTimer = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => resize(false), 150);
+});
+canvas.addEventListener('click', () => {
+  seed = (Math.random() * 1e9) | 0;
+  paletteIndex = (paletteIndex + 1 + Math.floor(Math.random() * (PALETTES.length - 1))) % PALETTES.length;
+  generate(seed, paletteIndex);
+  t0 = performance.now(); playIntro = true;
+});
+
+resize(true);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
