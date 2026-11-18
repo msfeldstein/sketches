@@ -35,9 +35,16 @@ window.GALLERY_MANIFEST = {
           label: "Evolving",
           prompt: "Have the iris slowly animate all of its noise functions across a time dimension.",
         },
+        {
+          label: "Currents",
+          prompt: "Make sure the iris canvases are high dpi. Have small electric currents run through them.",
+        },
       ],
       entries: [
-        { id: "opus-5-5", model: "Opus 5.5", detail: "Cursor" },
+        {
+          id: "opus-5-5", model: "Opus 5.5", detail: "Cursor",
+          stageNotes: { 5: "Revised: 10x more, smaller particles (WebGL2)" },
+        },
         {
           id: "astra-6-2-high", model: "Astra 6.2", detail: "High reasoning · Codex",
           stageNotes: { 4: "Revised after feedback that the motion was invisible" },
