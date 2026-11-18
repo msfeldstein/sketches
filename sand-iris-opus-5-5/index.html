@@ -287,7 +287,7 @@ function irisColor(u, th) {
 let W = 0, H = 0, dpr = 1, R = 0, cx = 0, cy = 0;
 const DELTA = 4;
 const U0 = -0.03, U1 = 1.17;
-let GN_U = 0, GN_T = 0, gridA, gridB, gridN, gRow = 0, gTA = 0, tp = 0, gAlpha = 0;
+let GN_U = 0, GN_T = 0, gridA, gridB, gridN, gRow = 0, gTA = 0, tp = 0;
 
 function computeRows(grid, from, to) {
   for (let iu = from; iu < to; iu++) {
@@ -425,36 +425,13 @@ void main() {
   }
   o = vec4(vec3(v), vAlpha);
 }`;
-// Spark grains for the currents: pixel position, intensity, size; blended additively.
-const SPARK_VS = `#version 300 es
-precision highp float;
-layout(location=0) in vec4 aP;
-uniform vec2 uRes;
-out float vI;
-void main() {
-  vec2 clip = aP.xy / uRes * 2.0 - 1.0;
-  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
-  gl_PointSize = max(aP.w, 1.0);
-  vI = aP.z * min(1.0, aP.w * aP.w);
-}`;
-const SPARK_FS = `#version 300 es
-precision mediump float;
-in float vI;
-out vec4 o;
-void main() { o = vec4(vec3(vI), 1.0); }`;
-
 const grainProg = program(GRAIN_VS, GRAIN_FS);
-const sparkProg = program(SPARK_VS, SPARK_FS);
 const grainVao = gl.createVertexArray(), grainBuf = gl.createBuffer();
 gl.bindVertexArray(grainVao);
 gl.bindBuffer(gl.ARRAY_BUFFER, grainBuf);
 gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
 gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, 20, 12);
 gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, 20, 16);
-const sparkVao = gl.createVertexArray(), sparkBuf = gl.createBuffer();
-gl.bindVertexArray(sparkVao);
-gl.bindBuffer(gl.ARRAY_BUFFER, sparkBuf);
-gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
 gl.bindVertexArray(null);
 
 function makeTex(filter, wrapS) {
@@ -583,111 +560,6 @@ function generate(seed, paletteIndex) {
   gl.bindBuffer(gl.ARRAY_BUFFER, grainBuf);
   gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array(ab, 0, n * 20), gl.STATIC_DRAW);
   initGrids();
-  currents.length = 0;
-}
-
-// ---------- electric currents ----------
-// Short-lived sparks that crawl through the dark gaps between fibre strands of the
-// live pattern grid, drawn additively as bright grains with a scatter of glow grains.
-const currents = [];
-let nextSpawn = 0;
-let sparks = new Float32Array(4 * 65536), nSparks = 0;
-
-function gridValueAt(u, th) {
-  let iu = Math.round((u - U0) / (U1 - U0) * (GN_U - 1));
-  iu = iu < 0 ? 0 : iu >= GN_U ? GN_U - 1 : iu;
-  let it = Math.round(th / TAU * GN_T) % GN_T; if (it < 0) it += GN_T;
-  const o = (iu * GN_T + it) * 4;
-  const v = gridA[o] + (gridB[o] - gridA[o]) * gAlpha;
-  const d = gridA[o + 1] + (gridB[o + 1] - gridA[o + 1]) * gAlpha;
-  return v * d;
-}
-
-function walkCurrent(u, th, dir, steps, depth, start, out) {
-  const pts = [u, th];
-  out.push({ pts, start });
-  for (let i = 0; i < steps; i++) {
-    const nu = u + dir * (0.005 + Math.random() * 0.006);
-    if (nu < 0.03 || nu > 0.97) break;
-    const unit = 0.0042 / (0.3 + 0.7 * nu);
-    let best = th, bestScore = -1e9;
-    for (let k = -2; k <= 2; k++) {
-      const c = th + k * unit;
-      const score = -gridValueAt(nu, c) + Math.random() * 45 - Math.abs(k) * 5;
-      if (score > bestScore) { bestScore = score; best = c; }
-    }
-    u = nu; th = best;
-    pts.push(u, th);
-    if (depth === 0 && Math.random() < 0.06) {
-      walkCurrent(u, th, Math.random() < 0.8 ? dir : -dir, 5 + (Math.random() * 14) | 0, 1, start + i + 1, out);
-    }
-  }
-}
-
-function spawnCurrent(t) {
-  const paths = [];
-  const u = 0.06 + Math.random() * 0.86;
-  walkCurrent(u, Math.random() * TAU, Math.random() < 0.5 ? 1 : -1, 24 + (Math.random() * 60) | 0, 0, 0, paths);
-  let len = 0;
-  for (const p of paths) len = Math.max(len, p.start + p.pts.length / 2);
-  currents.push({ paths, born: t, speed: 50 + Math.random() * 70, len, glow: 0.7 + Math.random() * 0.5 });
-}
-
-function spark(x, y, i, size) {
-  if (nSparks * 4 + 4 > sparks.length) {
-    const grown = new Float32Array(sparks.length * 2); grown.set(sparks); sparks = grown;
-  }
-  const o = nSparks * 4;
-  sparks[o] = x; sparks[o + 1] = y; sparks[o + 2] = i; sparks[o + 3] = size;
-  nSparks++;
-}
-
-function buildCurrents(t, pR, span, rot, allowSpawn) {
-  nSparks = 0;
-  if (allowSpawn && t >= nextSpawn) {
-    if (currents.length < 10) spawnCurrent(t);
-    nextSpawn = t + 0.1 + Math.random() * 0.45;
-  }
-  const core = Math.max(1, dpr * 1.1);
-  const step = 0.6 * dpr;
-  const jit = 0.7 * dpr;
-  for (let ci = currents.length - 1; ci >= 0; ci--) {
-    const cur = currents[ci];
-    const age = t - cur.born;
-    const head = age * cur.speed;
-    const after = age - cur.len / cur.speed;
-    const fade = after > 0 ? 1 - after / 0.9 : 1;
-    if (fade <= 0) { currents.splice(ci, 1); continue; }
-    const flick = (0.55 + 0.45 * Math.random()) * cur.glow;
-    for (const path of cur.paths) {
-      const pts = path.pts, n = pts.length / 2;
-      const local = head - path.start;
-      if (local <= 0) continue;
-      let px = 0, py = 0;
-      for (let k = 0; k < n; k++) {
-        const r = pR + pts[2 * k] * span, a = pts[2 * k + 1] + rot;
-        const x = cx + r * Math.cos(a) + (Math.random() - 0.5) * jit;
-        const y = cy + r * Math.sin(a) + (Math.random() - 0.5) * jit;
-        if (k > 0 && k <= local) {
-          const I = Math.max(Math.exp(-(local - k) / 14), 0.35) * fade * flick;
-          const dx = x - px, dy = y - py;
-          const m = Math.max(1, Math.ceil(Math.hypot(dx, dy) / step));
-          for (let q = 0; q < m; q++) {
-            const sx = px + dx * q / m, sy = py + dy * q / m;
-            spark(sx, sy, I, I > 0.6 ? core + dpr * 0.6 : core);
-            for (let gq = 0; gq < 2; gq++) {
-              if (Math.random() < 0.6) {
-                const g = (Math.random() + Math.random() + Math.random() - 1.5) * 3.2 * dpr;
-                const h = (Math.random() + Math.random() + Math.random() - 1.5) * 3.2 * dpr;
-                spark(sx + g, sy + h, 0.5 * I * (0.4 + Math.random() * 0.6), dpr * (0.4 + Math.random() * 0.7));
-              }
-            }
-          }
-        }
-        px = x; py = y;
-      }
-    }
-  }
 }
 
 // ---------- rendering ----------
@@ -717,11 +589,9 @@ function frame(now) {
     const timeLeft = (gTA + DELTA - tp) * 0.75;
     workGrid(Math.ceil((GN_U - gRow) * Math.min(1, dtp / Math.max(timeLeft, 1e-3))), 0);
   }
-  gAlpha = alpha;
 
   // slow hippus: layered long-period pupil breathing
   const pR = R * PUPIL0 * (1 + 0.06 * Math.sin(t * 0.42) + 0.025 * Math.sin(t * 0.17 + 1.3) + 0.008 * Math.sin(t * 1.1));
-  const span = R - pR;
   // slow torsional sway of the whole eye
   const rot = 0.035 * Math.sin(t * 0.06) + 0.012 * Math.sin(t * 0.023 + 2);
   // the light slowly wanders around the upper left
@@ -733,7 +603,6 @@ function frame(now) {
   gl.clearColor(2 / 255, 2 / 255, 2 / 255, 1);
   gl.clear(gl.COLOR_BUFFER_BIT);
   gl.enable(gl.BLEND);
-
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   const u = grainProg.u;
   gl.useProgram(grainProg.pr);
@@ -749,16 +618,6 @@ function frame(now) {
   gl.bindVertexArray(grainVao);
   gl.drawArrays(gl.POINTS, 0, N);
 
-  buildCurrents(t, pR, span, rot, !intro);
-  if (nSparks > 0) {
-    gl.blendFunc(gl.ONE, gl.ONE);
-    gl.useProgram(sparkProg.pr);
-    gl.uniform2f(sparkProg.u.uRes, W, H);
-    gl.bindVertexArray(sparkVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, sparkBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, sparks.subarray(0, nSparks * 4), gl.STREAM_DRAW);
-    gl.drawArrays(gl.POINTS, 0, nSparks);
-  }
   gl.bindVertexArray(null);
   requestAnimationFrame(frame);
 }
