@@ -334,16 +334,17 @@
     const stLayer = new Uint8Array(CAP);
 
     let n = 0;
-    function emit(u, th, lum, radiusScale, alpha, layer, isIris) {
+    function emit(u, th, lum, radiusScale, alpha, layer, mode) {
       if (n >= CAP) return;
+      const m = mode === true ? 1 : (mode === false ? 0 : mode);
       stU[n]     = u;
       stCos[n]   = Math.cos(th);
       stSin[n]   = Math.sin(th);
-      stWob[n]   = isIris ? sampleLut(wobLut, th) : 0.0;
+      stWob[n]   = m === 1 ? sampleLut(wobLut, th) : 0.0;
       stLum[n]   = lum;
       stRad[n]   = radiusScale;
       stAlpha[n] = alpha;
-      stPack[n]  = rng() + (isIris ? 2.0 : 0.0);
+      stPack[n]  = rng() + m * 2.0;
       stLayer[n] = layer;
       n++;
     }
@@ -516,24 +517,21 @@
       emit(u, th, lum, 0.46 + rng() * 0.30, 0.92, 3, true);
     }
 
-    // 6. Layer 3: Stylized Ultra-Fine Powdery Silica Mist Wisping Off the Outer Limbal Rim
+    // 6. Layer 3: Slow Aeolian Drifting Powdery Silica Mist Wisping Off the Outer Limbal Rim
     for (let i = 0; i < mistCount; i++) {
       const th = rng() < 0.64
-        ? (Math.atan2(-LY, -LX) + (rng() + rng() + rng() - 1.5) * 1.12)
+        ? (Math.atan2(-LY, -LX) + (rng() + rng() + rng() - 1.5) * 1.15)
         : (rng() * TWO_PI);
       const cx = Math.cos(th), sy = Math.sin(th);
       const leeward = Math.max(0, -(cx * LX + sy * LY));
       const streak = fbm(cx * 18.0 + 2.4, sy * 18.0 - 7.3, 3);
-      const maxDrift = (0.038 + Math.pow(leeward, 1.6) * 0.32) * (0.42 + streak * 0.95);
-      const falloff = Math.pow(rng(), 1.9);
-      const u = 0.990 + falloff * maxDrift;
-      const driftedTh = th + falloff * falloff * 0.095 * Math.sin(th - 0.72) + (rng() - 0.5) * 0.005;
+      const driftSpan = (0.045 + Math.pow(leeward, 1.5) * 0.34) * (0.45 + streak * 0.95);
 
       const pick = rng();
-      let lum = pick < 0.54 ? (0.04 + rng() * 0.10) : (pick < 0.88 ? (0.24 + rng() * 0.32) : (0.62 + rng() * 0.30));
-      lum *= (1.0 - falloff * 0.70) * (0.42 + leeward * 0.65);
-      const alpha = Math.max(0.10, (0.68 - falloff * 0.48) * (0.50 + streak * 0.50));
-      emit(u, driftedTh, lum, 0.40 + rng() * 0.30, alpha, 3, false);
+      let lum = pick < 0.50 ? (0.05 + rng() * 0.12) : (pick < 0.86 ? (0.26 + rng() * 0.34) : (0.65 + rng() * 0.32));
+      lum *= (0.44 + leeward * 0.66);
+      const alpha = Math.max(0.14, 0.66 * (0.50 + streak * 0.50));
+      emit(driftSpan, th, lum, 0.38 + rng() * 0.32, alpha, 3, 2);
     }
 
     // O(N) counting sort back-to-front by anatomical layer (0 -> 1 -> 2 -> 3)
@@ -591,11 +589,11 @@
 
   // Verify WebGL program compilation cleanly before committing to WebGL path
   let glReady = false;
-  let prog, vbo, dispTex, uRes, uDpr, uOuterR, uPupilFrac, uTime;
+  let prog, vbo, dispTex, uRes, uDpr, uOuterR, uPupilFrac, uTime, uLightDir;
 
   if (gl) {
     const vsSource = `
-      attribute vec4 a_posData;   // x: u, y: cosTh, z: sinTh, w: pupilWobble
+      attribute vec4 a_posData;   // x: u (or driftSpan), y: cosTh, z: sinTh, w: pupilWobble
       attribute vec4 a_styleData; // x: lum, y: radiusScale, z: alpha, w: packedSeedMode
 
       uniform vec2 u_res;
@@ -603,6 +601,7 @@
       uniform float u_outerR;
       uniform float u_pupilFrac;
       uniform float u_time;
+      uniform vec2 u_lightDir;
       uniform sampler2D u_dispTex;
 
       varying float v_lum;
@@ -618,13 +617,46 @@
         float wob = a_posData.w;
 
         float seedMode = a_styleData.w;
-        float isIris = step(1.5, seedMode);
-        float seed = seedMode - isIris * 2.0;
+        float isMist = step(3.5, seedMode);
+        float isIris = step(1.5, seedMode) * (1.0 - isMist);
+        float seed = seedMode - isIris * 2.0 - isMist * 4.0;
+
+        // Ultra-slow glacial rotation of the whole iris (~14 minutes per revolution, ~0.0075 rad/s)
+        float slowSpin = sin(u_time * 0.055) * 0.038 + u_time * 0.0045;
+        float cs = cos(slowSpin), ss = sin(slowSpin);
+        vec2 radDir = vec2(cosT * cs - sinT * ss, cosT * ss + sinT * cs);
 
         float pf = u_pupilFrac + wob;
         float rFrac;
+        float alphaMod = 1.0;
+        float lumMod = 1.0;
+
         if (isIris > 0.5) {
-          rFrac = pf + u * (1.0 - pf);
+          // Slow accordion flexing & subtle organic peristaltic sand wave as the pupil dilates/contracts
+          float dilation = (u_pupilFrac - 0.235) / 0.048;
+          float sinMid = sin(u * 3.14159265);
+          // Smooth 3-lobe angular harmonic from radDir without needing atan()
+          float angHarm = radDir.y * (3.0 * radDir.x * radDir.x - radDir.y * radDir.y);
+          float flexTwist = dilation * sinMid * (0.024 + 0.010 * angHarm)
+                          + sin(u * 5.2 - u_time * 0.20 + angHarm * 1.8) * 0.0045 * sinMid;
+          float cf = cos(flexTwist), sf = sin(flexTwist);
+          radDir = vec2(radDir.x * cf - radDir.y * sf, radDir.x * sf + radDir.y * cf);
+
+          float radialWave = sin(u * 6.5 - u_time * 0.24 + seed * 1.4 + angHarm * 1.5) * 0.0032 * sinMid;
+          rFrac = pf + u * (1.0 - pf) + radialWave;
+        } else if (isMist > 0.5) {
+          // Slow continuous aeolian sand grains lifting off the limbal rim and drifting into the void (~40-65s cycle)
+          float speed = 0.014 + 0.013 * fract(seed * 7.31);
+          float life = fract(seed * 13.37 + u_time * speed);
+          float easeLife = pow(life, 1.35);
+          float driftU = 0.986 + easeLife * u;
+          float curl = easeLife * easeLife * 0.11 * (radDir.x * u_lightDir.y - radDir.y * u_lightDir.x);
+          float cc = cos(curl), sc = sin(curl);
+          radDir = vec2(radDir.x * cc - radDir.y * sc, radDir.x * sc + radDir.y * cc);
+          rFrac = 1.0 + (driftU - 1.0) * 0.78;
+          // Smoothly materialize at the rim and dissolve softly into darkness
+          alphaMod = smoothstep(0.0, 0.14, life) * (1.0 - smoothstep(0.45, 1.0, life));
+          lumMod = 1.0 - easeLife * 0.62;
         } else if (u < 0.0) {
           rFrac = (-u) * pf;
         } else {
@@ -632,7 +664,7 @@
         }
 
         vec2 center = u_res * 0.5;
-        vec2 basePos = center + vec2(cosT, sinT) * (rFrac * u_outerR);
+        vec2 basePos = center + radDir * (rFrac * u_outerR);
 
         vec2 uv = basePos / u_res;
         vec4 dSample = texture2D(u_dispTex, vec2(uv.x, 1.0 - uv.y));
@@ -654,13 +686,22 @@
         float ptSize = 2.0 * radiusPx + 1.4;
         gl_PointSize = ptSize;
 
-        float motion = clamp(length(grainScatter) / (u_dpr * 5.0), 0.0, 1.0);
-        float phase = fract(u_time * 0.16 + seed * 19.73);
-        float tri = 1.0 - abs(phase * 2.0 - 1.0) * 2.0;
-        float glint = (step(0.78, seed) * max(0.0, tri - 0.58) * 0.24 * step(0.38, a_styleData.x)) + motion * 0.20;
+        // Dynamic chiaroscuro modulation as the grazing key light slowly orbits across the sand relief
+        vec2 refL = vec2(-0.75, -0.66);
+        float refDot = cosT * refL.x + sinT * refL.y;
+        float curDot = radDir.x * u_lightDir.x + radDir.y * u_lightDir.y;
+        float refChi = 0.34 + 0.92 * smoothstep(-0.95, 0.92, refDot);
+        float curChi = 0.34 + 0.92 * smoothstep(-0.95, 0.92, curDot);
+        float lightRatio = mix(1.0, clamp(curChi / max(0.22, refChi), 0.42, 1.68), 0.78);
 
-        v_lum = clamp(a_styleData.x + glint, 0.0, 1.0);
-        v_alpha = a_styleData.z;
+        float motion = clamp(length(grainScatter) / (u_dpr * 5.0), 0.0, 1.0);
+        // Slow, meditative crystalline quartz shimmer (~24s cycle per grain, no rapid flicker)
+        float phase = fract(u_time * 0.042 + seed * 19.73);
+        float tri = 1.0 - abs(phase * 2.0 - 1.0) * 2.0;
+        float glint = (step(0.76, seed) * max(0.0, tri - 0.56) * 0.22 * step(0.35, a_styleData.x)) + motion * 0.20;
+
+        v_lum = clamp(a_styleData.x * lumMod * lightRatio + glint, 0.0, 1.0);
+        v_alpha = a_styleData.z * alphaMod;
         v_seed = seed;
         v_radiusPx = radiusPx;
         v_pointSize = ptSize;
@@ -669,6 +710,7 @@
 
     const fsSource = `
       precision mediump float;
+      uniform vec2 u_lightDir;
       varying float v_lum;
       varying float v_alpha;
       varying float v_seed;
@@ -684,13 +726,13 @@
         float cov = clamp((v_radiusPx + 0.36 - distPx) * 1.45, 0.0, 1.0) * v_alpha;
         if (cov < 0.004) discard;
 
-        // Microscopic 3D faceted mineral sand shading under top-left raking illumination
+        // Microscopic 3D faceted mineral sand shading responding to the slowly gliding raking light
         vec2 normXY = offsetPx / (v_radiusPx + 0.38);
         float r2 = min(1.0, dot(normXY, normXY));
         float nz = sqrt(max(0.04, 1.0 - r2));
         float facet = (v_seed - 0.5) * 0.58;
         vec3 normal = normalize(vec3(normXY.x + facet, normXY.y - facet * 0.7, nz));
-        vec3 lightDir = normalize(vec3(-0.74, -0.64, 0.48));
+        vec3 lightDir = normalize(vec3(u_lightDir, 0.48));
 
         float diff = max(0.0, dot(normal, lightDir));
         float microShade = 0.62 + 0.60 * diff;
@@ -746,6 +788,7 @@
     uOuterR    = gl.getUniformLocation(prog, 'u_outerR');
     uPupilFrac = gl.getUniformLocation(prog, 'u_pupilFrac');
     uTime      = gl.getUniformLocation(prog, 'u_time');
+    uLightDir  = gl.getUniformLocation(prog, 'u_lightDir');
     gl.uniform1i(gl.getUniformLocation(prog, 'u_dispTex'), 0);
 
     gl.enable(gl.BLEND);
@@ -833,10 +876,14 @@
     }
 
     const startTime = performance.now();
+    const baseLightAng = Math.atan2(LY, LX);
 
     function renderScene(t) {
       const outerR = Math.min(pw, ph) * 0.415;
-      const pupilFrac = 0.235 + Math.sin(t * 0.65) * 0.010 + Math.sin(t * 1.7 + 0.8) * 0.003;
+      // Slow, meditative physiological pupil breath (~24s primary wave + ~57s deep drift)
+      const pupilFrac = 0.238 + Math.sin(t * 0.26) * 0.036 + Math.sin(t * 0.11 + 1.2) * 0.012;
+      // Slow grazing key-light drift (~52s arc across the sand topography)
+      const lightAng = baseLightAng + Math.sin(t * 0.12) * 0.46 + Math.sin(t * 0.051 + 0.9) * 0.16;
 
       updateSandBrushField(outerR);
 
@@ -846,6 +893,7 @@
       gl.uniform1f(uOuterR, outerR);
       gl.uniform1f(uPupilFrac, pupilFrac);
       gl.uniform1f(uTime, t);
+      gl.uniform2f(uLightDir, Math.cos(lightAng), Math.sin(lightAng));
 
       gl.drawArrays(gl.POINTS, 0, sand.count);
     }
@@ -895,24 +943,44 @@
 
       const cx = pw * 0.5, cy = ph * 0.5;
       const outerR = Math.min(pw, ph) * 0.415;
-      const pupilFrac = 0.235 + Math.sin(t * 0.65) * 0.010;
+      const pupilFrac = 0.238 + Math.sin(t * 0.26) * 0.036 + Math.sin(t * 0.11 + 1.2) * 0.012;
+      const slowSpin = Math.sin(t * 0.055) * 0.038 + t * 0.0045;
+      const cs = Math.cos(slowSpin), ss = Math.sin(slowSpin);
       const data = sand.data;
 
       for (let i = 0, end = sand.count * 8; i < end; i += 8) {
         const u = data[i];
-        const isIris = data[i + 7] >= 1.5;
+        const sm = data[i + 7];
+        const isMist = sm >= 3.5;
+        const isIris = !isMist && sm >= 1.5;
+        const seed = sm - (isIris ? 2.0 : (isMist ? 4.0 : 0.0));
         const pf = pupilFrac + data[i + 3];
-        const rFrac = isIris ? (pf + u * (1.0 - pf)) : (u < 0 ? (-u) * pf : 1.0 + (u - 1.0) * 0.76);
-        const x = cx + data[i + 1] * rFrac * outerR;
-        const y = cy + data[i + 2] * rFrac * outerR;
+
+        let rFrac, aScale = 1.0, lScale = 1.0;
+        if (isIris) {
+          rFrac = pf + u * (1.0 - pf);
+        } else if (isMist) {
+          const life = (seed * 13.37 + t * (0.014 + 0.013 * ((seed * 7.31) % 1))) % 1;
+          const ease = Math.pow(life, 1.35);
+          rFrac = 1.0 + (0.986 + ease * u - 1.0) * 0.78;
+          aScale = smoothstep(0.0, 0.14, life) * (1.0 - smoothstep(0.45, 1.0, life));
+          lScale = 1.0 - ease * 0.62;
+        } else {
+          rFrac = u < 0 ? (-u) * pf : 1.0 + (u - 1.0) * 0.76;
+        }
+
+        const rx = data[i + 1] * cs - data[i + 2] * ss;
+        const ry = data[i + 1] * ss + data[i + 2] * cs;
+        const x = cx + rx * rFrac * outerR;
+        const y = cy + ry * rFrac * outerR;
         const ix = x | 0, iy = y | 0;
         if (ix < 1 || ix >= pw - 2 || iy < 1 || iy >= ph - 2) continue;
 
         const fx = x - ix, fy = y - iy;
-        const lum = (data[i + 4] * 255) | 0;
+        const lum = (data[i + 4] * lScale * 255) | 0;
         const hi = lum < 235 ? lum + 20 : 255;
         const sh = (lum * 204) >> 8;
-        const baseA = data[i + 6] * 245;
+        const baseA = data[i + 6] * aScale * 245;
 
         const w00 = ((1 - fx) * (1 - fy) * baseA) | 0;
         const w10 = (fx * (1 - fy) * baseA) | 0;
