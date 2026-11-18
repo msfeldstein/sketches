@@ -17,7 +17,6 @@
 
 const TAU = Math.PI * 2;
 const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
 
 // ---------- utilities ----------
 function mulberry32(a) {
@@ -281,24 +280,21 @@ function irisColor(u, th) {
   colR = r; colG = g; colB = b; colDens = dens;
 }
 
-// ---------- particle buffers ----------
-let W = 0, H = 0, dpr = 1, R = 0, cx = 0, cy = 0;
-let img, buf;
-let N = 0, KIND, SIZE, PHASE, A, CS, SN, DEL, MUL, ADD, LS, DRIFT, CI, FU, FT, HT;
-
+// ---------- pattern grid ----------
 // The iris pattern lives on a polar grid (u x angle) holding value, density and a
-// placement flow offset per cell. Keyframes DELTA seconds apart are blended each
-// frame while the next keyframe is computed a few rows at a time.
+// placement flow offset per cell. Keyframes DELTA seconds apart are blended on the
+// GPU while the next keyframe is computed a few rows at a time.
+let W = 0, H = 0, dpr = 1, R = 0, cx = 0, cy = 0;
 const DELTA = 4;
 const U0 = -0.03, U1 = 1.17;
-let GN_U = 0, GN_T = 0, GS = 0, gridA, gridB, gridN, gridC, gRow = 0, gTA = 0, tp = 0;
+let GN_U = 0, GN_T = 0, gridA, gridB, gridN, gRow = 0, gTA = 0, tp = 0, gAlpha = 0;
 
 function computeRows(grid, from, to) {
   for (let iu = from; iu < to; iu++) {
     const u = U0 + (U1 - U0) * iu / (GN_U - 1);
     rowCrypts = crypts.filter(cr => Math.abs(u - cr.u) < cr.lu * 1.4);
-    let o = iu * GS * 4;
-    for (let it = 0; it < GS; it++, o += 4) {
+    let o = iu * GN_T * 4;
+    for (let it = 0; it < GN_T; it++, o += 4) {
       const th = it / GN_T * TAU;
       irisColor(u, th);
       grid[o] = 0.3 * colR + 0.59 * colG + 0.11 * colB;
@@ -313,41 +309,22 @@ function workGrid(rows, budgetMs) {
   const end = performance.now() + budgetMs;
   while (gRow < GN_U && (rows-- > 0 || performance.now() < end)) { computeRows(gridN, gRow, gRow + 1); gRow++; }
 }
-
-// Counting-sort a range of grains by grid row so per-frame grid lookups stay cache-local.
-function sortByRow(from, to) {
-  const len = to - from;
-  const count = new Int32Array(GN_U + 1);
-  const rowOf = i => (CI[i] / (GS * 4)) | 0;
-  for (let i = from; i < to; i++) count[rowOf(i) + 1]++;
-  for (let r = 0; r < GN_U; r++) count[r + 1] += count[r];
-  const perm = new Int32Array(len);
-  for (let i = from; i < to; i++) perm[count[rowOf(i)]++] = i;
-  for (const arr of [KIND, SIZE, PHASE, A, CS, SN, DEL, MUL, ADD, LS, DRIFT, CI, FU, FT, HT]) {
-    const tmp = arr.slice(from, to);
-    for (let j = 0; j < len; j++) arr[from + j] = tmp[perm[j] - from];
-  }
-}
 function sizeGrids() {
-  GN_T = Math.max(512, Math.min(2048, Math.round(TAU * R * 1.1 / 1.4)));
-  GN_U = Math.max(64, Math.min(200, Math.round(R * 0.85 / 2)));
-  GS = GN_T + 1;
+  GN_T = Math.max(512, Math.min(2048, Math.round(TAU * R / dpr * 1.1 / 1.4)));
+  GN_U = Math.max(64, Math.min(200, Math.round(R / dpr * 0.85 / 2)));
 }
 function initGrids() {
-  const size = GN_U * GS * 4;
-  gridA = new Float32Array(size); gridB = new Float32Array(size);
-  gridN = new Float32Array(size); gridC = new Float32Array(size);
+  const size = GN_U * GN_T * 4;
+  gridA = new Float32Array(size); gridB = new Float32Array(size); gridN = new Float32Array(size);
   tp = 0; gTA = 0;
   patternAt(0); computeRows(gridA, 0, GN_U);
   patternAt(DELTA * TIME_SCALE); computeRows(gridB, 0, GN_U);
   beginGrid(2 * DELTA);
+  uploadGrid(texA, gridA); uploadGrid(texB, gridB);
 }
-let kernels;
+
 const PUPIL0 = 0.3;          // nominal pupil radius, as a fraction of iris radius
-const SINT = new Float32Array(1024);
-for (let i = 0; i < 1024; i++) SINT[i] = Math.sin(i / 1024 * TAU);
 const LIGHT0 = Math.atan2(-0.8, -0.6);
-const BG = (255 << 24) | (2 << 16) | (2 << 8) | 2;
 
 // High-contrast S-curve with a soft posterize for a graphic, print-like look.
 function tone(v) {
@@ -359,44 +336,157 @@ function tone(v) {
   return l * 255;
 }
 
-function pack(r, g, b) {
-  r = r < 0 ? 0 : r > 255 ? 255 : r | 0;
-  g = g < 0 ? 0 : g > 255 ? 255 : g | 0;
-  b = b < 0 ? 0 : b > 255 ? 255 : b | 0;
-  return (255 << 24) | (b << 16) | (g << 8) | r;
+// ---------- WebGL ----------
+const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false });
+if (!gl) throw new Error('This sketch needs WebGL2.');
+
+function program(vs, fs) {
+  const mk = (type, src) => {
+    const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+    return sh;
+  };
+  const pr = gl.createProgram();
+  gl.attachShader(pr, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(pr);
+  if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+  const u = {};
+  const n = gl.getProgramParameter(pr, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(pr, i).name; u[name] = gl.getUniformLocation(pr, name); }
+  return { pr, u };
 }
 
-// Lighting is applied per frame to each grain's unlit value; tone and grain
-// shading are looked up from tables indexed by lit value * 2.
-const LUT_N = 1024;
-const LUT_B = new Uint32Array(LUT_N), LUT_L = new Uint32Array(LUT_N), LUT_S = new Uint32Array(LUT_N);
-for (let i = 0; i < LUT_N; i++) {
-  const v = tone(i / 2);
-  LUT_B[i] = pack(v, v, v);
-  LUT_L[i] = pack(v * 1.28 + 10, v * 1.28 + 10, v * 1.28 + 10);
-  LUT_S[i] = pack(v * 0.6, v * 0.6, v * 0.6);
+// Grain attributes (20 bytes): a, angle, unlit add | kind, size, phase, threshold | delay, mul, drift, light
+const GRAIN_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec4 aB0;
+layout(location=2) in vec4 aB1;
+uniform vec2 uRes, uC, uLight, uCatch;
+uniform float uR, uPR, uT, uRot, uAlpha, uIntro, uDpr, uMaxSize;
+uniform vec3 uGrid;
+uniform sampler2D uGA, uGB, uLut;
+out float vVal, vAlpha, vSize;
+const float TAU = 6.2831853;
+void main() {
+  float kind = floor(aB0.x * 3.0 + 0.5);
+  float size = aB0.y * uMaxSize;
+  float ph = aB0.z * TAU;
+  float a = aPos.x, th = aPos.y, raw = aPos.z;
+  if (kind < 0.5) {
+    float fu = (a - uGrid.x) / (uGrid.y - uGrid.x) * (uGrid.z - 1.0);
+    vec2 tc = vec2(th / TAU, (fu + 0.5) / uGrid.z);
+    vec4 g = mix(texture(uGA, tc), texture(uGB, tc), uAlpha);
+    if (aB0.w > g.y) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+    raw = (g.x * aB1.y * 1.3 + raw) * (1.0 + 0.1 * sin(ph * 13.0 + uT * 0.6));
+    a += g.z; th += g.w;
+  }
+  if (kind < 1.5) {
+    a += 0.018 * aB1.z * sin(ph * 4.0 + uT * 0.245);
+    th += uRot;
+  }
+  float r = kind < 0.5 ? uPR + a * (uR - uPR) : kind < 1.5 ? a * uPR : a * uR;
+  vec2 dir = vec2(cos(th), sin(th));
+  float ls = aB1.w * 1.5;
+  if (kind < 2.5) {
+    float d = dot(uLight, dir);
+    raw *= kind > 1.5 ? 1.0 + ls * max(d, 0.0) : max(0.15, 1.0 + ls * d);
+  }
+  if (uIntro > 0.5) {
+    float e = (uT - aB1.x * 2.5) / 1.7;
+    if (e <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+    if (e < 1.0) {
+      float q = pow(1.0 - e, 3.0);
+      float o = q * 2.4;
+      dir = vec2(dir.x * cos(o) - dir.y * sin(o), dir.x * sin(o) + dir.y * cos(o));
+      r *= 1.0 + q * 0.7;
+    }
+  }
+  vec2 pos = uC + r * dir + (kind > 2.5 ? uCatch : vec2(0.0));
+  pos += 0.16 * uDpr * vec2(sin(ph * 4.0 + uT * 0.38), sin(ph * 28.0 + uT * 0.38 + 1.57));
+  vec2 clip = pos / uRes * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  gl_PointSize = max(size, 1.0);
+  vAlpha = min(1.0, size * size);
+  vSize = size;
+  vVal = texture(uLut, vec2((clamp(raw * 2.0, 0.0, 1023.0) + 0.5) / 1024.0, 0.5)).r;
+}`;
+const GRAIN_FS = `#version 300 es
+precision mediump float;
+in float vVal, vAlpha, vSize;
+out vec4 o;
+void main() {
+  float v = vVal;
+  if (vSize >= 1.6) {
+    vec2 pc = gl_PointCoord - 0.5;
+    if (vSize >= 2.5 && dot(pc, pc) > 0.25) discard;
+    float sh = -(pc.x + pc.y);
+    v = sh > 0.18 ? min(1.0, v * 1.28 + 0.04) : sh < -0.18 ? v * 0.6 : v;
+  }
+  o = vec4(vec3(v), vAlpha);
+}`;
+// Spark grains for the currents: pixel position, intensity, size; blended additively.
+const SPARK_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec4 aP;
+uniform vec2 uRes;
+out float vI;
+void main() {
+  vec2 clip = aP.xy / uRes * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  gl_PointSize = max(aP.w, 1.0);
+  vI = aP.z * min(1.0, aP.w * aP.w);
+}`;
+const SPARK_FS = `#version 300 es
+precision mediump float;
+in float vI;
+out vec4 o;
+void main() { o = vec4(vec3(vI), 1.0); }`;
+
+const grainProg = program(GRAIN_VS, GRAIN_FS);
+const sparkProg = program(SPARK_VS, SPARK_FS);
+const grainVao = gl.createVertexArray(), grainBuf = gl.createBuffer();
+gl.bindVertexArray(grainVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, grainBuf);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, 20, 12);
+gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, 20, 16);
+const sparkVao = gl.createVertexArray(), sparkBuf = gl.createBuffer();
+gl.bindVertexArray(sparkVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, sparkBuf);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
+gl.bindVertexArray(null);
+
+function makeTex(filter, wrapS) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapS);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+let texA = makeTex(gl.LINEAR, gl.REPEAT), texB = makeTex(gl.LINEAR, gl.REPEAT);
+function uploadGrid(tex, data) {
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, GN_T, GN_U, 0, gl.RGBA, gl.FLOAT, data);
+}
+const lutTex = makeTex(gl.NEAREST, gl.CLAMP_TO_EDGE);
+{
+  const lut = new Uint8Array(1024);
+  for (let i = 0; i < 1024; i++) lut[i] = Math.round(Math.min(255, tone(i / 2)));
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1024, 1, 0, gl.RED, gl.UNSIGNED_BYTE, lut);
 }
 
-function buildKernels() {
-  // [dx, dy, shade] with shade 0 = base, 1 = lit, 2 = shadow (light from top-left)
-  const defs = [
-    null,
-    [[0, 0, 0]],
-    [[0, 0, 1], [1, 0, 0], [0, 1, 0], [1, 1, 2]],
-    [[1, 0, 1], [0, 1, 1], [1, 1, 0], [2, 1, 2], [1, 2, 2]],
-    [[1, 0, 1], [2, 0, 1], [0, 1, 1], [1, 1, 1], [2, 1, 0], [3, 1, 0],
-     [0, 2, 0], [1, 2, 0], [2, 2, 0], [3, 2, 2], [1, 3, 2], [2, 3, 2]],
-    [[1, 0, 1], [2, 0, 1], [3, 0, 1], [0, 1, 1], [1, 1, 1], [2, 1, 1], [3, 1, 0], [4, 1, 0],
-     [0, 2, 1], [1, 2, 0], [2, 2, 0], [3, 2, 0], [4, 2, 2], [0, 3, 0], [1, 3, 0], [2, 3, 0],
-     [3, 3, 2], [4, 3, 2], [1, 4, 2], [2, 4, 2], [3, 4, 2]]
-  ];
-  kernels = defs.map(d => d && { off: Int32Array.from(d.map(k => k[1] * W + k[0])), sh: Uint8Array.from(d.map(k => k[2])) });
-}
-const COVER = [0, 1, 4, 5, 12, 21];
+// ---------- grains ----------
+// Grains are sub-pixel to a few device pixels; anything under a pixel is drawn
+// as a single pixel with alpha equal to its area.
+const MAX_GRAINS = 1.2e7;
+let N = 0, sizeScale = 1, maxSize = 1;
 
 function grainSize(rnd) {
-  const s = Math.round(dpr * (0.72 + Math.pow(rnd(), 3) * 1.7));
-  return s < 1 ? 1 : s > 5 ? 5 : s;
+  return sizeScale * dpr * (0.72 + Math.pow(rnd(), 3) * 1.7) / Math.sqrt(13);
 }
 
 function generate(seed, paletteIndex) {
@@ -405,31 +495,33 @@ function generate(seed, paletteIndex) {
   setupPattern(rnd);
   sizeGrids();
 
-  let avgCover = 0;
-  for (let i = 0; i < 2000; i++) avgCover += COVER[grainSize(rnd)];
-  avgCover /= 2000;
-
   const rOut = 1.09;
   const irisArea = Math.PI * R * R * (rOut * rOut - PUPIL0 * PUPIL0);
   const pupilArea = Math.PI * sq(R * PUPIL0);
+  const bgArea = Math.max(0, W * H - Math.PI * R * R);
+  const cl = { x: -0.2, y: -0.235, a: 0.1, b: 0.078 };
+  const catchArea = Math.PI * cl.a * cl.b * R * R * 1.6 + Math.PI * sq(0.022 * R) * 1.4;
+  const coverFor = () => { let c = 0; for (let i = 0; i < 4000; i++) c += sq(grainSize(rnd)); return c / 4000; };
+  sizeScale = 1;
+  let avgCover = coverFor();
+  const want = (irisArea * 1.35 + pupilArea * 1.4 + bgArea * 0.3 + catchArea) / avgCover;
+  if (want > MAX_GRAINS) { sizeScale = Math.sqrt(want / MAX_GRAINS); avgCover = coverFor(); }
+  maxSize = sizeScale * dpr * 2.42 / Math.sqrt(13);
+
   const nIris = Math.floor(irisArea * 1.35 / avgCover);
   const nPupil = Math.floor(pupilArea * 1.4 / avgCover);
-  const nBg = Math.floor(Math.max(0, W * H - Math.PI * R * R) * 0.5 / avgCover);
-  const cl = { x: -0.2, y: -0.235, a: 0.1, b: 0.078 };
-  const nCatch = Math.floor(Math.PI * cl.a * cl.b * R * R * 1.6 / avgCover) + Math.floor(Math.PI * sq(0.022 * R) * 1.4 / avgCover);
-  const cap = nIris + nPupil + nBg + nCatch;
+  const nBg = Math.floor(bgArea * 0.3 / avgCover);
+  const nMain = Math.floor(Math.PI * cl.a * cl.b * R * R * 1.6 / avgCover);
+  const nSmall = Math.floor(Math.PI * sq(0.022 * R) * 1.4 / avgCover);
+  const cap = nIris + nPupil + nBg + nMain + nSmall;
 
-  KIND = new Uint8Array(cap); SIZE = new Uint8Array(cap); PHASE = new Uint8Array(cap);
-  A = new Float32Array(cap); CS = new Float32Array(cap); SN = new Float32Array(cap);
-  DEL = new Float32Array(cap); MUL = new Float32Array(cap); ADD = new Float32Array(cap);
-  LS = new Float32Array(cap); DRIFT = new Float32Array(cap);
-  CI = new Int32Array(cap); FU = new Float32Array(cap); FT = new Float32Array(cap); HT = new Float32Array(cap);
+  const ab = new ArrayBuffer(cap * 20);
+  const F = new Float32Array(ab), B = new Uint8Array(ab);
   let n = 0;
+  const b8 = x => x <= 0 ? 0 : x >= 1 ? 255 : (x * 255 + 0.5) | 0;
 
-  // A grain's unlit value is gridValue * MUL + ADD; non-iris grains have MUL = 0.
+  // A grain's unlit value is gridValue * mul + add; non-iris grains have mul = 0.
   function push(kind, a, th, v, delay, light) {
-    const s = grainSize(rnd);
-    // per-grain variation: brightness, jitter, stray mineral grains
     const lum = 0.8 + rnd() * 0.4, jit = (rnd() - 0.5) * 10;
     let mul = 0, add = v * lum + jit;
     if (kind === 0) { mul = lum; add = jit; }
@@ -438,64 +530,48 @@ function generate(seed, paletteIndex) {
       if (m < 0.035) { if (kind !== 2) { mul *= 0.65; add = add * 0.65 + 84; } }
       else if (m < 0.065) { mul *= 0.45; add *= 0.45; }
     }
-    KIND[n] = kind; SIZE[n] = s; PHASE[n] = (rnd() * 256) | 0;
-    A[n] = a; CS[n] = Math.cos(th); SN[n] = Math.sin(th); DEL[n] = delay;
-    MUL[n] = mul; ADD[n] = add; LS[n] = light || 0;
-    const dr = rnd(); DRIFT[n] = dr * dr * dr;
-    if (kind === 0) {
-      const fu = (a - U0) / (U1 - U0) * (GN_U - 1);
-      const iu = Math.min(GN_U - 2, Math.max(0, Math.floor(fu)));
-      const ft = th / TAU * GN_T;
-      const it = Math.min(GN_T - 1, Math.floor(ft));
-      CI[n] = (iu * GS + it) * 4; FU[n] = fu - iu; FT[n] = ft - it; HT[n] = rnd();
-    }
+    const f = n * 5, o = n * 20;
+    F[f] = a; F[f + 1] = th; F[f + 2] = add;
+    B[o + 12] = b8(kind / 3); B[o + 13] = b8(grainSize(rnd) / maxSize); B[o + 14] = (rnd() * 256) | 0; B[o + 15] = b8(rnd());
+    const dr = rnd();
+    B[o + 16] = b8(delay / 2.5); B[o + 17] = b8(mul / 1.3); B[o + 18] = b8(dr * dr * dr); B[o + 19] = b8((light || 0) / 1.5);
     n++;
   }
 
-  // background sand: dark, with a faint cool halo around the limbus
+  // background sand: dark, with a faint halo around the limbus
+  const vigEnd = Math.hypot(W, H) * 0.5 / R;
   for (let i = 0; i < nBg; i++) {
     const x = rnd() * W, y = rnd() * H;
     const dx = x - cx, dy = y - cy;
     const d = Math.sqrt(dx * dx + dy * dy) / R;
     if (d < 0.99) continue;
-    const vig = 1 - 0.85 * smooth(1.2, Math.hypot(W, H) * 0.5 / R, d);
+    const vig = 1 - 0.85 * smooth(1.2, vigEnd, d);
     const halo = smooth(1.5, 1.03, d);
-    const t = rnd();
-    const r = (6 + t * 9) * vig + halo * 6;
-    push(2, d, Math.atan2(dy, dx), r, rnd() * 0.8, halo * 1.5);
+    push(2, d, Math.atan2(dy, dx), (6 + rnd() * 9) * vig + halo * 6, rnd() * 0.8, halo * 1.5);
   }
 
   // iris
-  const irisStart = n;
   for (let i = 0; i < nIris; i++) {
     const rr = Math.sqrt(rnd() * (rOut * rOut - PUPIL0 * PUPIL0) + PUPIL0 * PUPIL0);
     const u = (rr - PUPIL0) / (1 - PUPIL0);
-    const th = rnd() * TAU;
-    push(0, u, th, 0, 0.25 + rnd() * 0.7 + (1 - Math.min(u, 1)) * 0.5, 0.36 * (0.35 + 0.65 * u));
+    push(0, u, rnd() * TAU, 0, 0.25 + rnd() * 0.7 + (1 - Math.min(u, 1)) * 0.5, 0.36 * (0.35 + 0.65 * u));
   }
-
-  sortByRow(irisStart, n);
 
   // pupil: near-black grains with a faint corneal sheen
   for (let i = 0; i < nPupil; i++) {
     const a = Math.sqrt(rnd());
-    const th = rnd() * TAU;
     const edge = smooth(0.9, 1.0, a);
-    const v = 8 + (P.ruff[0] * 0.45 - 8) * edge;
-    push(1, a, th, v, 0.9 + rnd() * 0.7, 1.4 * a);
+    push(1, a, rnd() * TAU, 8 + (P.ruff[0] * 0.45 - 8) * edge, 0.9 + rnd() * 0.7, 1.4 * a);
   }
 
   // catchlights: soft-edged rounded window plus a small secondary glint
-  const nMain = Math.floor(Math.PI * cl.a * cl.b * R * R * 1.6 / avgCover);
   for (let i = 0; i < nMain; i++) {
     const x = (rnd() * 2 - 1) * cl.a * 1.25, y = (rnd() * 2 - 1) * cl.b * 1.25;
     const d = Math.pow(Math.pow(Math.abs(x / cl.a), 2.6) + Math.pow(Math.abs(y / cl.b), 2.6), 1 / 2.6);
     if (rnd() > smooth(1.2, 0.55, d) * 0.92) continue;
     const px = cl.x + x, py = cl.y + y;
-    const v = 0.72 + 0.28 * smooth(1.1, 0.2, d);
-    push(3, Math.hypot(px, py), Math.atan2(py, px), 255 * v, 1.6 + rnd() * 0.5);
+    push(3, Math.hypot(px, py), Math.atan2(py, px), 255 * (0.72 + 0.28 * smooth(1.1, 0.2, d)), 1.6 + rnd() * 0.5);
   }
-  const nSmall = nCatch - nMain;
   for (let i = 0; i < nSmall; i++) {
     const a = Math.sqrt(rnd()) * 0.022, t = rnd() * TAU;
     const px = 0.16 + Math.cos(t) * a, py = 0.205 + Math.sin(t) * a;
@@ -504,6 +580,8 @@ function generate(seed, paletteIndex) {
   }
 
   N = n;
+  gl.bindBuffer(gl.ARRAY_BUFFER, grainBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array(ab, 0, n * 20), gl.STATIC_DRAW);
   initGrids();
   currents.length = 0;
 }
@@ -513,13 +591,16 @@ function generate(seed, paletteIndex) {
 // live pattern grid, drawn additively as bright grains with a scatter of glow grains.
 const currents = [];
 let nextSpawn = 0;
+let sparks = new Float32Array(4 * 65536), nSparks = 0;
 
 function gridValueAt(u, th) {
   let iu = Math.round((u - U0) / (U1 - U0) * (GN_U - 1));
   iu = iu < 0 ? 0 : iu >= GN_U ? GN_U - 1 : iu;
   let it = Math.round(th / TAU * GN_T) % GN_T; if (it < 0) it += GN_T;
-  const o = (iu * GS + it) * 4;
-  return gridC[o] * gridC[o + 1];
+  const o = (iu * GN_T + it) * 4;
+  const v = gridA[o] + (gridB[o] - gridA[o]) * gAlpha;
+  const d = gridA[o + 1] + (gridB[o + 1] - gridA[o + 1]) * gAlpha;
+  return v * d;
 }
 
 function walkCurrent(u, th, dir, steps, depth, start, out) {
@@ -552,21 +633,23 @@ function spawnCurrent(t) {
   currents.push({ paths, born: t, speed: 50 + Math.random() * 70, len, glow: 0.7 + Math.random() * 0.5 });
 }
 
-function addGray(x, y, a) {
-  if (x < 0 || y < 0 || x >= W || y >= H) return;
-  const p = y * W + x;
-  let v = (buf[p] & 255) + a;
-  if (v > 255) v = 255;
-  buf[p] = 0xff000000 | (v << 16) | (v << 8) | v;
+function spark(x, y, i, size) {
+  if (nSparks * 4 + 4 > sparks.length) {
+    const grown = new Float32Array(sparks.length * 2); grown.set(sparks); sparks = grown;
+  }
+  const o = nSparks * 4;
+  sparks[o] = x; sparks[o + 1] = y; sparks[o + 2] = i; sparks[o + 3] = size;
+  nSparks++;
 }
 
-function drawCurrents(t, pR, span, rot, allowSpawn) {
+function buildCurrents(t, pR, span, rot, allowSpawn) {
+  nSparks = 0;
   if (allowSpawn && t >= nextSpawn) {
     if (currents.length < 10) spawnCurrent(t);
     nextSpawn = t + 0.1 + Math.random() * 0.45;
   }
-  const core = Math.max(1, Math.round(dpr * 1.1));
-  const step = 0.7 * dpr;
+  const core = Math.max(1, dpr * 1.1);
+  const step = 0.6 * dpr;
   const jit = 0.7 * dpr;
   for (let ci = currents.length - 1; ci >= 0; ci--) {
     const cur = currents[ci];
@@ -586,22 +669,18 @@ function drawCurrents(t, pR, span, rot, allowSpawn) {
         const x = cx + r * Math.cos(a) + (Math.random() - 0.5) * jit;
         const y = cy + r * Math.sin(a) + (Math.random() - 0.5) * jit;
         if (k > 0 && k <= local) {
-          const d = local - k;
-          const I = Math.max(Math.exp(-d / 14), 0.35) * fade * flick;
+          const I = Math.max(Math.exp(-(local - k) / 14), 0.35) * fade * flick;
           const dx = x - px, dy = y - py;
           const m = Math.max(1, Math.ceil(Math.hypot(dx, dy) / step));
           for (let q = 0; q < m; q++) {
             const sx = px + dx * q / m, sy = py + dy * q / m;
-            const ix = sx | 0, iy = sy | 0;
-            const ca = 255 * I;
-            const cw = I > 0.6 ? core + 1 : core;
-            for (let oy = 0; oy < cw; oy++) for (let ox = 0; ox < cw; ox++) addGray(ix + ox, iy + oy, ca);
-            if (Math.random() < 0.55) {
-              const g = (Math.random() + Math.random() + Math.random() - 1.5) * 3.2 * dpr;
-              const h = (Math.random() + Math.random() + Math.random() - 1.5) * 3.2 * dpr;
-              const gs = Math.max(1, Math.round(dpr * (0.6 + Math.random())));
-              const ga = 140 * I * (0.4 + Math.random() * 0.6);
-              for (let oy = 0; oy < gs; oy++) for (let ox = 0; ox < gs; ox++) addGray(((sx + g) | 0) + ox, ((sy + h) | 0) + oy, ga);
+            spark(sx, sy, I, I > 0.6 ? core + dpr * 0.6 : core);
+            for (let gq = 0; gq < 2; gq++) {
+              if (Math.random() < 0.6) {
+                const g = (Math.random() + Math.random() + Math.random() - 1.5) * 3.2 * dpr;
+                const h = (Math.random() + Math.random() + Math.random() - 1.5) * 3.2 * dpr;
+                spark(sx + g, sy + h, 0.5 * I * (0.4 + Math.random() * 0.6), dpr * (0.4 + Math.random() * 0.7));
+              }
             }
           }
         }
@@ -617,7 +696,6 @@ let seed = 7, paletteIndex = 0, t0 = performance.now(), introLen = 3.4, playIntr
 function frame(now) {
   const t = (now - t0) / 1000;
   const intro = playIntro && t < introLen;
-  buf.fill(BG);
 
   // advance the pattern clock; it waits at a keyframe if the next grid isn't ready
   const dtp = Math.min(0.1, Math.max(0, (now - (lastNow || now)) / 1000));
@@ -627,6 +705,8 @@ function frame(now) {
   if (alpha >= 1) {
     if (gRow >= GN_U) {
       const old = gridA; gridA = gridB; gridB = gridN; gridN = old;
+      const ot = texA; texA = texB; texB = ot;
+      uploadGrid(texB, gridB);
       gTA += DELTA;
       alpha = clamp01((tp - gTA) / DELTA);
       beginGrid(gTA + 2 * DELTA);
@@ -637,82 +717,49 @@ function frame(now) {
     const timeLeft = (gTA + DELTA - tp) * 0.75;
     workGrid(Math.ceil((GN_U - gRow) * Math.min(1, dtp / Math.max(timeLeft, 1e-3))), 0);
   }
-  const ga = gridA, gb = gridB, gc = gridC;
-  for (let j = 0, L = gc.length; j < L; j++) gc[j] = ga[j] + (gb[j] - ga[j]) * alpha;
-  const GS4 = GS * 4;
-  const tw = (t * 6) | 0;
+  gAlpha = alpha;
 
   // slow hippus: layered long-period pupil breathing
   const pR = R * PUPIL0 * (1 + 0.06 * Math.sin(t * 0.42) + 0.025 * Math.sin(t * 0.17 + 1.3) + 0.008 * Math.sin(t * 1.1));
   const span = R - pR;
   // slow torsional sway of the whole eye
   const rot = 0.035 * Math.sin(t * 0.06) + 0.012 * Math.sin(t * 0.023 + 2);
-  const rc = Math.cos(rot), rs = Math.sin(rot);
   // the light slowly wanders around the upper left
   const la = LIGHT0 + 0.38 * Math.sin(t * 0.075) + 0.16 * Math.sin(t * 0.031 + 0.7);
   const lx = Math.cos(la), ly = Math.sin(la);
   const catchX = (lx - Math.cos(LIGHT0)) * 0.31 * R, catchY = (ly - Math.sin(LIGHT0)) * 0.31 * R;
-  const amp = 0.38 * dpr;
-  const tt = (t * 10) | 0;
-  const dt = (t * 40) | 0;
-  const driftAmp = 0.018;
-  const Wm = W - 6, Hm = H - 6;
-  const ko = kernels;
 
-  for (let i = 0; i < N; i++) {
-    const k = KIND[i];
-    let a = A[i];
-    let c = CS[i], s = SN[i];
-    const ph = PHASE[i];
-    let ox = 0, oy = 0, raw = ADD[i];
-    if (k === 0) {
-      const j = CI[i];
-      if (HT[i] > gc[j + 1]) continue;
-      const fu = FU[i], ft = FT[i];
-      const v00 = gc[j], v01 = gc[j + 4], v10 = gc[j + GS4], v11 = gc[j + GS4 + 4];
-      const top = v00 + (v01 - v00) * ft;
-      const gv = top + (v10 + (v11 - v10) * ft - top) * fu;
-      raw = (gv * MUL[i] + raw) * (1 + 0.1 * SINT[(ph * 13 + tw) & 1023]);
-      a += gc[j + 2];
-      const dth = gc[j + 3];
-      const nc = c - s * dth; s = s + c * dth; c = nc;
-    }
-    if (k < 2) {
-      a += driftAmp * DRIFT[i] * SINT[(ph * 4 + dt) & 1023];
-      const nc = c * rc - s * rs; s = c * rs + s * rc; c = nc;
-    } else if (k === 3) { ox = catchX; oy = catchY; }
-    let r = k === 0 ? pR + a * span : k === 1 ? a * pR : a * R;
+  gl.viewport(0, 0, W, H);
+  gl.clearColor(2 / 255, 2 / 255, 2 / 255, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.BLEND);
 
-    let lit = raw < 0 ? 0 : raw;
-    if (k !== 3) {
-      const d = lx * c + ly * s;
-      if (k === 2) lit *= 1 + LS[i] * (d > 0 ? d : 0);
-      else { const L = 1 + LS[i] * d; lit *= L < 0.15 ? 0.15 : L; }
-    }
-    let li = (lit * 2) | 0; if (li > LUT_N - 1) li = LUT_N - 1;
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  const u = grainProg.u;
+  gl.useProgram(grainProg.pr);
+  gl.uniform2f(u.uRes, W, H); gl.uniform2f(u.uC, cx, cy);
+  gl.uniform2f(u.uLight, lx, ly); gl.uniform2f(u.uCatch, catchX, catchY);
+  gl.uniform1f(u.uR, R); gl.uniform1f(u.uPR, pR); gl.uniform1f(u.uT, t); gl.uniform1f(u.uRot, rot);
+  gl.uniform1f(u.uAlpha, alpha); gl.uniform1f(u.uIntro, intro ? 1 : 0); gl.uniform1f(u.uDpr, dpr);
+  gl.uniform1f(u.uMaxSize, maxSize);
+  gl.uniform3f(u.uGrid, U0, U1, GN_U);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texA); gl.uniform1i(u.uGA, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texB); gl.uniform1i(u.uGB, 1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, lutTex); gl.uniform1i(u.uLut, 2);
+  gl.bindVertexArray(grainVao);
+  gl.drawArrays(gl.POINTS, 0, N);
 
-    if (intro) {
-      const e = (t - DEL[i]) / 1.7;
-      if (e <= 0) continue;
-      if (e < 1) {
-        const ie = 1 - e; const q = ie * ie * ie;
-        const o = q * 2.4;
-        const co = Math.cos(o), so = Math.sin(o);
-        const nc = c * co - s * so; s = c * so + s * co; c = nc;
-        r *= 1 + q * 0.7;
-      }
-    }
-    const x = (cx + r * c + ox + amp * SINT[((ph << 2) + tt) & 1023] + 0.5) | 0;
-    const y = (cy + r * s + oy + amp * SINT[((ph * 28) + tt + 256) & 1023] + 0.5) | 0;
-    if (x < 0 || y < 0 || x > Wm || y > Hm) continue;
-    const kern = ko[SIZE[i]];
-    const p = y * W + x;
-    const cb = LUT_B[li], cl = LUT_L[li], cs = LUT_S[li];
-    const off = kern.off, sh = kern.sh;
-    for (let j = 0; j < off.length; j++) { const q = sh[j]; buf[p + off[j]] = q === 0 ? cb : q === 1 ? cl : cs; }
+  buildCurrents(t, pR, span, rot, !intro);
+  if (nSparks > 0) {
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(sparkProg.pr);
+    gl.uniform2f(sparkProg.u.uRes, W, H);
+    gl.bindVertexArray(sparkVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, sparkBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, sparks.subarray(0, nSparks * 4), gl.STREAM_DRAW);
+    gl.drawArrays(gl.POINTS, 0, nSparks);
   }
-  drawCurrents(t, pR, span, rot, !intro);
-  ctx.putImageData(img, 0, 0);
+  gl.bindVertexArray(null);
   requestAnimationFrame(frame);
 }
 
@@ -728,9 +775,6 @@ function resize(keepIntro, pw, ph) {
   canvas.width = W; canvas.height = H;
   cx = W / 2; cy = H / 2;
   R = Math.min(W, H) * 0.44;
-  img = ctx.createImageData(W, H);
-  buf = new Uint32Array(img.data.buffer);
-  buildKernels();
   generate(seed, paletteIndex);
   if (!keepIntro) playIntro = false;
 }
@@ -772,7 +816,6 @@ canvas.addEventListener('click', () => {
   generate(seed, paletteIndex);
   t0 = performance.now(); playIntro = true;
 });
-
 })();
 </script>
 </body>
