@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Glowing Blue Tree Under Full Moon</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #020512;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  let width = 0;
+  let height = 0;
+  let dpr = 1;
+
+  // Deterministic PRNG for procedural tree & static stars
+  function mulberry32(seed) {
+    return function() {
+      let t = seed += 0x6D2B79F5;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  let stars = [];
+  let branches = [];
+  let leaves = [];
+  let fireflies = [];
+  let shootingStars = [];
+
+  function buildScene() {
+    const rand = mulberry32(4219);
+    stars = [];
+    const starCount = Math.floor((width * height) / 3200);
+    for (let i = 0; i < starCount; i++) {
+      stars.push({
+        x: rand() * width,
+        y: rand() * height * 0.78,
+        r: rand() * 1.4 + 0.3,
+        alpha: rand() * 0.65 + 0.25,
+        twinkleSpeed: rand() * 2.2 + 0.6,
+        phase: rand() * Math.PI * 2,
+        hue: rand() > 0.7 ? 205 : 225
+      });
+    }
+
+    // Build recursive tree normalized around (0, 0) base and scale to screen
+    branches = [];
+    leaves = [];
+    const treeScale = Math.min(width, height) * 0.21;
+    const baseX = width * 0.5;
+    const baseY = height * 0.84;
+
+    function grow(x, y, angle, len, thickness, depth) {
+      const swaySeed = rand() * Math.PI * 2;
+      const x2 = x + Math.cos(angle) * len;
+      const y2 = y + Math.sin(angle) * len;
+
+      const cpOffset = (rand() - 0.5) * len * 0.22;
+      const midX = (x + x2) * 0.5 + Math.cos(angle + Math.PI / 2) * cpOffset;
+      const midY = (y + y2) * 0.5 + Math.sin(angle + Math.PI / 2) * cpOffset;
+
+      branches.push({
+        x1: x, y1: y,
+        cx: midX, cy: midY,
+        x2, y2,
+        thickness,
+        depth,
+        swaySeed
+      });
+
+      if (depth >= 7) {
+        const clusterCount = 7;
+        for (let i = 0; i < clusterCount; i++) {
+          const dist = rand() * treeScale * 0.16;
+          const th = rand() * Math.PI * 2;
+          leaves.push({
+            x: x2 + Math.cos(th) * dist,
+            y: y2 + Math.sin(th) * dist * 0.75,
+            r: (rand() * 4.5 + 2.0) * (treeScale / 180),
+            phase: rand() * Math.PI * 2,
+            speed: rand() * 1.8 + 0.8,
+            hue: 192 + rand() * 28,
+            bright: 65 + rand() * 30
+          });
+        }
+        return;
+      }
+
+      const subCount = depth < 2 ? 3 : (rand() > 0.32 ? 2 : 3);
+      for (let i = 0; i < subCount; i++) {
+        const spread = depth === 0 ? 0.52 : 0.46;
+        const offset = (i - (subCount - 1) / 2) * spread + (rand() - 0.5) * 0.24;
+        const nextLen = len * (0.71 + rand() * 0.12);
+        const nextThick = thickness * 0.67;
+        grow(x2, y2, angle + offset, nextLen, nextThick, depth + 1);
+      }
+    }
+
+    grow(baseX, baseY, -Math.PI / 2, treeScale, treeScale * 0.15, 0);
+
+    // Floating bioluminescent motes
+    fireflies = [];
+    for (let i = 0; i < 65; i++) {
+      fireflies.push({
+        x: baseX + (rand() - 0.5) * treeScale * 3.8,
+        y: baseY - rand() * treeScale * 2.8,
+        vx: (rand() - 0.5) * 0.25,
+        vy: -rand() * 0.35 - 0.08,
+        r: rand() * 2.4 + 0.9,
+        phase: rand() * Math.PI * 2
+      });
+    }
+  }
+
+  function spawnShootingStar(initial = false) {
+    const startX = Math.random() * width * 0.85 + width * 0.1;
+    const startY = Math.random() * height * 0.32 + height * 0.03;
+    const angle = Math.PI * (0.68 + Math.random() * 0.16); // Down-left streak
+    const speed = (Math.min(width, height) * 0.75) + Math.random() * 350;
+    shootingStars.push({
+      x: startX,
+      y: startY,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      len: 110 + Math.random() * 130,
+      life: initial ? Math.random() * 0.45 : 0,
+      maxLife: 0.65 + Math.random() * 0.45,
+      width: 1.4 + Math.random() * 1.4
+    });
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    buildScene();
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  spawnShootingStar(true);
+
+  let lastTime = performance.now();
+  let nextMeteorTimer = 0.6;
+
+  function drawSky() {
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, height);
+    skyGrad.addColorStop(0, '#020512');
+    skyGrad.addColorStop(0.48, '#06122c');
+    skyGrad.addColorStop(0.82, '#0b2248');
+    skyGrad.addColorStop(1, '#040a18');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function drawStars(t) {
+    for (const s of stars) {
+      const tw = 0.65 + 0.35 * Math.sin(t * s.twinkleSpeed + s.phase);
+      ctx.fillStyle = `hsla(${s.hue}, 80%, 88%, ${s.alpha * tw})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawMoon() {
+    const moonX = width * 0.5;
+    const moonY = height * 0.36;
+    const moonR = Math.min(width, height) * 0.21;
+
+    // Outer atmospheric halo
+    const halo = ctx.createRadialGradient(moonX, moonY, moonR * 0.85, moonX, moonY, moonR * 3.1);
+    halo.addColorStop(0, 'rgba(195, 228, 255, 0.38)');
+    halo.addColorStop(0.35, 'rgba(100, 175, 255, 0.16)');
+    halo.addColorStop(0.7, 'rgba(40, 100, 210, 0.05)');
+    halo.addColorStop(1, 'rgba(10, 30, 80, 0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, width, height);
+
+    // Moon disc
+    const discGrad = ctx.createRadialGradient(
+      moonX - moonR * 0.22, moonY - moonR * 0.22, moonR * 0.1,
+      moonX, moonY, moonR
+    );
+    discGrad.addColorStop(0, '#ffffff');
+    discGrad.addColorStop(0.65, '#eef6ff');
+    discGrad.addColorStop(0.92, '#d5e7fb');
+    discGrad.addColorStop(1, '#bfd8f5');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2);
+    ctx.fillStyle = discGrad;
+    ctx.fill();
+    ctx.clip();
+
+    // Subtle lunar maria
+    const craters = [
+      { dx: -0.28, dy: -0.18, r: 0.26, a: 0.07 },
+      { dx: 0.18, dy: -0.26, r: 0.21, a: 0.06 },
+      { dx: 0.26, dy: 0.12, r: 0.28, a: 0.065 },
+      { dx: -0.14, dy: 0.25, r: 0.22, a: 0.05 },
+      { dx: 0.02, dy: -0.02, r: 0.32, a: 0.045 }
+    ];
+    for (const c of craters) {
+      ctx.fillStyle = `rgba(120, 152, 195, ${c.a})`;
+      ctx.beginPath();
+      ctx.arc(moonX + c.dx * moonR, moonY + c.dy * moonR, c.r * moonR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawShootingStars(dt) {
+    nextMeteorTimer -= dt;
+    if (nextMeteorTimer <= 0) {
+      spawnShootingStar(false);
+      nextMeteorTimer = 0.8 + Math.random() * 1.8;
+    }
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = shootingStars.length - 1; i >= 0; i--) {
+      const m = shootingStars[i];
+      m.life += dt;
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+
+      if (m.life >= m.maxLife) {
+        shootingStars.splice(i, 1);
+        continue;
+      }
+
+      const p = m.life / m.maxLife;
+      const alpha = Math.sin(p * Math.PI);
+      const speedMag = Math.hypot(m.vx, m.vy);
+      const tailX = m.x - (m.vx / speedMag) * m.len;
+      const tailY = m.y - (m.vy / speedMag) * m.len;
+
+      const grad = ctx.createLinearGradient(m.x, m.y, tailX, tailY);
+      grad.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+      grad.addColorStop(0.25, `rgba(130, 220, 255, ${alpha * 0.8})`);
+      grad.addColorStop(1, 'rgba(40, 140, 255, 0)');
+
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = m.width;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(m.x, m.y);
+      ctx.lineTo(tailX, tailY);
+      ctx.stroke();
+
+      // Bright head flare
+      ctx.fillStyle = `rgba(220, 248, 255, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.width * 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawHills() {
+    // Back hills
+    ctx.fillStyle = '#040d21';
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+    for (let x = 0; x <= width; x += 24) {
+      const nx = x / width;
+      const y = height * 0.84 - Math.sin(nx * Math.PI) * height * 0.05 + Math.sin(nx * 9) * 8;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(width, height);
+    ctx.closePath();
+    ctx.fill();
+
+    // Foreground mound with blue luminescence at base of tree
+    const baseGlow = ctx.createRadialGradient(
+      width * 0.5, height * 0.84, 5,
+      width * 0.5, height * 0.86, Math.min(width, height) * 0.36
+    );
+    baseGlow.addColorStop(0, 'rgba(30, 180, 255, 0.35)');
+    baseGlow.addColorStop(0.45, 'rgba(10, 80, 175, 0.14)');
+    baseGlow.addColorStop(1, 'rgba(2, 8, 22, 0)');
+
+    ctx.fillStyle = '#020714';
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+    ctx.quadraticCurveTo(width * 0.5, height * 0.77, width, height * 0.9);
+    ctx.lineTo(width, height);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = baseGlow;
+    ctx.fillRect(0, height * 0.68, width, height * 0.32);
+  }
+
+  function drawTree(t, dt) {
+    const canopyGlow = ctx.createRadialGradient(
+      width * 0.5, height * 0.52, 10,
+      width * 0.5, height * 0.52, Math.min(width, height) * 0.38
+    );
+    canopyGlow.addColorStop(0, 'rgba(0, 195, 255, 0.34)');
+    canopyGlow.addColorStop(0.5, 'rgba(0, 110, 255, 0.12)');
+    canopyGlow.addColorStop(1, 'rgba(0, 50, 160, 0)');
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = canopyGlow;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+
+    // Draw glowing branches & dark core with energy veins
+    ctx.lineCap = 'round';
+    for (const b of branches) {
+      const sway = Math.sin(t * 1.1 + b.swaySeed) * (b.depth * 0.65);
+      const x2 = b.x2 + sway;
+      const cx = b.cx + sway * 0.5;
+
+      // Outer blue aura on branches
+      ctx.strokeStyle = 'rgba(20, 175, 255, 0.24)';
+      ctx.lineWidth = b.thickness * 1.75;
+      ctx.beginPath();
+      ctx.moveTo(b.x1, b.y1);
+      ctx.quadraticCurveTo(cx, b.cy, x2, b.y2);
+      ctx.stroke();
+
+      // Core bark tinted deep sapphire
+      ctx.strokeStyle = '#061a38';
+      ctx.lineWidth = b.thickness;
+      ctx.beginPath();
+      ctx.moveTo(b.x1, b.y1);
+      ctx.quadraticCurveTo(cx, b.cy, x2, b.y2);
+      ctx.stroke();
+
+      // Inner glowing blue sap vein
+      const pulse = 0.55 + 0.45 * Math.sin(t * 2.2 - b.depth * 0.6 + b.swaySeed);
+      ctx.strokeStyle = `rgba(95, 225, 255, ${0.45 + pulse * 0.45})`;
+      ctx.lineWidth = Math.max(1.1, b.thickness * 0.32);
+      ctx.beginPath();
+      ctx.moveTo(b.x1, b.y1);
+      ctx.quadraticCurveTo(cx, b.cy, x2, b.y2);
+      ctx.stroke();
+    }
+
+    // Bioluminescent blue foliage
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const leaf of leaves) {
+      const swayX = Math.sin(t * 1.2 + leaf.phase) * 2.8;
+      const swayY = Math.cos(t * 0.9 + leaf.phase) * 1.5;
+      const pulse = 0.65 + 0.35 * Math.sin(t * leaf.speed + leaf.phase);
+      const lx = leaf.x + swayX;
+      const ly = leaf.y + swayY;
+
+      const grad = ctx.createRadialGradient(lx, ly, 0, lx, ly, leaf.r * 3.2);
+      grad.addColorStop(0, `hsla(${leaf.hue}, 100%, 92%, ${0.85 * pulse})`);
+      grad.addColorStop(0.35, `hsla(${leaf.hue + 6}, 100%, ${leaf.bright}%, ${0.48 * pulse})`);
+      grad.addColorStop(1, `hsla(${leaf.hue + 14}, 100%, 50%, 0)`);
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(lx, ly, leaf.r * 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Drifting glowing particles
+    const treeSpan = Math.min(width, height) * 0.4;
+    for (const f of fireflies) {
+      f.x += (f.vx + Math.sin(t + f.phase) * 0.2) * (dt * 60);
+      f.y += f.vy * (dt * 60);
+      if (f.y < height * 0.18) {
+        f.y = height * 0.83;
+        f.x = width * 0.5 + (Math.random() - 0.5) * treeSpan * 1.6;
+      }
+      const glow = 0.5 + 0.5 * Math.sin(t * 3 + f.phase);
+      ctx.fillStyle = `rgba(130, 235, 255, ${glow * 0.85})`;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function frame(now) {
+    const dt = Math.min((now - lastTime) / 1000, 0.05);
+    lastTime = now;
+    const t = now / 1000;
+
+    drawSky();
+    drawStars(t);
+    drawMoon();
+    drawShootingStars(dt);
+    drawHills();
+    drawTree(t, dt);
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
