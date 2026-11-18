@@ -46,35 +46,51 @@
     };
   }
 
-  // Fast deterministic integer hash (no Math.sin overhead)
+  // Fast deterministic 2D & 3D integer hashes and 3D time-evolving rotated FBM noise
   function hash2i(x, y) {
     let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263);
     h = Math.imul(h ^ (h >>> 13), 1274126177);
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   }
 
-  function noise2(x, y) {
-    const xi = Math.floor(x), yi = Math.floor(y);
-    const xf = x - xi, yf = y - yi;
-    const u = xf * xf * (3 - 2 * xf);
-    const v = yf * yf * (3 - 2 * yf);
-    const a = hash2i(xi, yi);
-    const b = hash2i(xi + 1, yi);
-    const c = hash2i(xi, yi + 1);
-    const d = hash2i(xi + 1, yi + 1);
-    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+  function hash3i(x, y, z) {
+    let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(z | 0, 1442695041);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   }
 
-  function fbm(x, y, octaves = 4) {
+  function noise3(x, y, z) {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const xf = x - xi, yf = y - yi, zf = z - zi;
+    const u = xf * xf * (3 - 2 * xf);
+    const v = yf * yf * (3 - 2 * yf);
+    const w = zf * zf * (3 - 2 * zf);
+
+    const n000 = hash3i(xi, yi, zi),         n100 = hash3i(xi + 1, yi, zi);
+    const n010 = hash3i(xi, yi + 1, zi),     n110 = hash3i(xi + 1, yi + 1, zi);
+    const n001 = hash3i(xi, yi, zi + 1),     n101 = hash3i(xi + 1, yi, zi + 1);
+    const n011 = hash3i(xi, yi + 1, zi + 1), n111 = hash3i(xi + 1, yi + 1, zi + 1);
+
+    const nx00 = n000 + (n100 - n000) * u;
+    const nx10 = n010 + (n110 - n010) * u;
+    const nx01 = n001 + (n101 - n001) * u;
+    const nx11 = n011 + (n111 - n011) * u;
+
+    const nxy0 = nx00 + (nx10 - nx00) * v;
+    const nxy1 = nx01 + (nx11 - nx01) * v;
+    return nxy0 + (nxy1 - nxy0) * w;
+  }
+
+  function fbm(x, y, octaves = 4, z = 0) {
     let val = 0, amp = 0.5;
-    let px = x, py = y;
+    let px = x, py = y, pz = z;
     for (let i = 0; i < octaves; i++) {
-      val += amp * noise2(px, py);
-      // Rotate each octave by ~37 degrees to eliminate any Cartesian lattice alignment
-      const nx = (px * 1.62 + py * 1.21);
-      const ny = (-px * 1.21 + py * 1.62);
-      px = nx + 17.3;
-      py = ny - 11.7;
+      val += amp * noise3(px, py, pz);
+      // 3D Pythagorean orthonormal rotation * 2.02 across (x, y, time) to eliminate any lattice alignment
+      const nx = (0.00 * px + 0.80 * py + 0.60 * pz) * 2.02 + 17.3;
+      const ny = (-0.80 * px + 0.36 * py - 0.48 * pz) * 2.02 - 11.7;
+      const nz = (-0.60 * px - 0.48 * py + 0.64 * pz) * 2.02 + 7.9;
+      px = nx; py = ny; pz = nz;
       amp *= 0.5;
     }
     return val;
@@ -588,10 +604,203 @@
   let sand = null;
 
   // Verify WebGL program compilation cleanly before committing to WebGL path
+  const NOISE_W = 384, NOISE_H = 192;
   let glReady = false;
   let prog, vbo, dispTex, uRes, uDpr, uOuterR, uPupilFrac, uTime, uLightDir;
+  let noiseProg, quadVbo, noiseTex, noiseFbo, uNoiseTime;
 
   if (gl) {
+    const noiseVsSource = `
+      attribute vec2 a_quad;
+      varying vec2 v_uv;
+      void main() {
+        v_uv = a_quad * 0.5 + 0.5;
+        gl_Position = vec4(a_quad, 0.0, 1.0);
+      }
+    `;
+
+    // Evaluates ALL of the iris's anatomical noise functions across a slow 3D time dimension (x, y, z = time)
+    const noiseFsSource = `
+      #ifdef GL_FRAGMENT_PRECISION_HIGH
+      precision highp float;
+      #else
+      precision mediump float;
+      #endif
+
+      varying vec2 v_uv;
+      uniform float u_time;
+
+      float hash3(vec3 p) {
+        p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+        p += dot(p, p.yxz + 33.33);
+        return fract((p.x + p.y) * p.z);
+      }
+
+      float noise3(vec3 x) {
+        vec3 i = floor(x);
+        vec3 f = fract(x);
+        vec3 u = f * f * (3.0 - 2.0 * f);
+
+        float n000 = hash3(i + vec3(0.0, 0.0, 0.0));
+        float n100 = hash3(i + vec3(1.0, 0.0, 0.0));
+        float n010 = hash3(i + vec3(0.0, 1.0, 0.0));
+        float n110 = hash3(i + vec3(1.0, 1.0, 0.0));
+        float n001 = hash3(i + vec3(0.0, 0.0, 1.0));
+        float n101 = hash3(i + vec3(1.0, 0.0, 1.0));
+        float n011 = hash3(i + vec3(0.0, 1.0, 1.0));
+        float n111 = hash3(i + vec3(1.0, 1.0, 1.0));
+
+        float nx00 = mix(n000, n100, u.x);
+        float nx10 = mix(n010, n110, u.x);
+        float nx01 = mix(n001, n101, u.x);
+        float nx11 = mix(n011, n111, u.x);
+
+        return mix(mix(nx00, nx10, u.y), mix(nx01, nx11, u.y), u.z);
+      }
+
+      vec3 rotOct(vec3 p) {
+        return vec3(
+           0.80 * p.y + 0.60 * p.z,
+          -0.80 * p.x + 0.36 * p.y - 0.48 * p.z,
+          -0.60 * p.x - 0.48 * p.y + 0.64 * p.z
+        ) * 2.02 + vec3(17.3, -11.7, 7.9);
+      }
+
+      float fbm2(vec3 p) {
+        float v = 0.5 * noise3(p);
+        p = rotOct(p);
+        v += 0.25 * noise3(p);
+        return v / 0.75;
+      }
+
+      float fbm3(vec3 p) {
+        float v = 0.5 * noise3(p);
+        p = rotOct(p);
+        v += 0.25 * noise3(p);
+        p = rotOct(p);
+        v += 0.125 * noise3(p);
+        return v / 0.875;
+      }
+
+      float fbm4(vec3 p) {
+        float v = 0.5 * noise3(p);
+        p = rotOct(p);
+        v += 0.25 * noise3(p);
+        p = rotOct(p);
+        v += 0.125 * noise3(p);
+        p = rotOct(p);
+        v += 0.0625 * noise3(p);
+        return v / 0.9375;
+      }
+
+      // 1. Collarette domain-warped wreath & ridge arcade noise across time z
+      float evalColU(float cx, float sy, float z) {
+        float wx = fbm3(vec3(cx * 2.1 + 4.7, sy * 2.1 - 3.3, z * 0.85)) - 0.5;
+        float wy = fbm3(vec3(cx * 2.1 - 8.2, sy * 2.1 + 6.1, z * 0.85 + 5.1)) - 0.5;
+        float broad = fbm4(vec3(cx * 2.6 + wx * 1.3 + 8.3, sy * 2.6 + wy * 1.3 - 4.1, z * 0.70)) - 0.5;
+        float med   = fbm3(vec3(cx * 6.4 - 12.7, sy * 6.4 + 9.2, z * 0.95)) - 0.5;
+        float r1 = 0.5 - abs(fbm3(vec3(cx * 11.2 + wx * 2.1, sy * 11.2 + wy * 2.1, z * 1.15)) - 0.5);
+        float r2 = 0.5 - abs(fbm2(vec3(cx * 20.5 - 5.1, sy * 20.5 + 3.7, -z * 1.25)) - 0.5);
+        return 0.312 + broad * 0.088 + med * 0.052 + (r1 - 0.32) * 0.108 + (r2 - 0.34) * 0.042;
+      }
+
+      // 2. Pupil contour noise across time z
+      float evalWob(float cx, float sy, float z) {
+        float pLow  = (fbm3(vec3(cx * 2.7 + 1.9, sy * 2.7 - 2.7, z * 0.80)) - 0.5) * 0.014;
+        float pFine = (fbm2(vec3(cx * 19.0 - 4.2, sy * 19.0 + 7.1, z * 1.30)) - 0.5) * 0.0055;
+        return pLow + pFine;
+      }
+
+      // 3. Counter-weaving trabecular crypt & ridge sheets across time z
+      vec2 evalWeave(float th, float u, float colU, float z) {
+        float cx = cos(th), sy = sin(th);
+        float warp = (fbm3(vec3(cx * 4.5 + u * 3.2, sy * 4.5 - u * 3.2, z * 0.90)) - 0.5) * 0.35;
+        float a1 = th + u * 0.28 + warp * 0.22;
+        float a2 = th - u * 0.24 - warp * 0.20;
+
+        float w1 = fbm3(vec3(cos(a1) * 13.5 + 4.1, sin(a1) * 13.5 + u * 4.6 - 2.7, z * 1.10));
+        float w2 = fbm3(vec3(cos(a2) * 15.0 - 8.3, sin(a2) * 15.0 - u * 4.2 + 5.9, -z * 1.05));
+        float sheaf = fbm2(vec3(cx * 28.0 + warp, sy * 28.0 + u * 3.0, z * 1.35));
+
+        float distCol = u - colU;
+        float peri = exp(-(distCol - 0.035) * (distCol - 0.035) / 0.021);
+        float innerEnv = step(u, colU) * smoothstep(0.03, 0.10, u) * 0.68;
+        float outerEnv = smoothstep(0.35, 0.55, u) * (1.0 - smoothstep(0.75, 0.94, u)) * 0.26;
+
+        float comb = w1 * 0.52 + w2 * 0.48;
+        float cryptOpen = smoothstep(0.46, 0.24, comb) * (peri + innerEnv * 0.75);
+        float sheafVal  = smoothstep(0.48, 0.26, sheaf) * (outerEnv + peri * 0.28);
+        float crypt = min(1.0, cryptOpen * 0.92 + sheafVal);
+        float ridge = smoothstep(0.54, 0.78, comb) * (0.35 + peri * 0.65);
+        return vec2(crypt, ridge);
+      }
+
+      // Evaluate combined noise state at time z: x = angleOffset, y = radialOffset, z = localToneFactor
+      vec3 evalState(float th, float u, float z) {
+        float cx = cos(th), sy = sin(th);
+        float colU = evalColU(cx, sy, z);
+        float wob  = evalWob(cx, sy, z);
+
+        // 4. Stromal radial fiber flow noise across time z
+        float flow = (fbm3(vec3(cx * 3.4 + u * 2.3, sy * 3.4 - u * 2.3, z * 0.95 - u * 0.12)) - 0.5) * 0.062 * sin(u * 3.14159265);
+
+        float dTh = 0.01636;
+        vec2 crC = evalWeave(th, u, colU, z);
+        vec2 crP = evalWeave(th - dTh, u, colU, z);
+        vec2 crN = evalWeave(th + dTh, u, colU, z);
+        float deflect = (crP.x - crN.x) * 0.5 * 0.028;
+
+        // 5. Concentric contraction furrow mask & phase noise across time z
+        float fMask  = fbm2(vec3(cx * 2.3 - 5.0, sy * 2.3 + 5.0, z * 0.65));
+        float fPhase = fbm2(vec3(cx * 3.0, sy * 3.0, z * 0.85)) * 2.6;
+        float fur = 0.0;
+        if (u > 0.52 && u < 0.88 && fMask > 0.40) {
+          float fw = sin((u - 0.53) * 54.0 + fPhase);
+          if (fw > 0.58) {
+            fur = ((fw - 0.58) / 0.42) * 0.24 * smoothstep(0.40, 0.65, fMask);
+          }
+        }
+
+        // 6. Sector tonal locks & fine stromal cloud noise across time z
+        float secVar = fbm3(vec3(cx * 2.1 + 3.1, sy * 2.1 - 2.4, z * 0.60));
+        float secMed = fbm2(vec3(cx * 6.2 - 7.2, sy * 6.2 + 6.1, z * 0.82));
+        float toneMod = 0.78 + secVar * 0.34 + secMed * 0.15;
+
+        float distCol = u - colU;
+        float onCrown = exp(-(distCol * distCol) / 0.0036);
+        float cryptFade = 0.24 + 0.76 * exp(-crC.x * 2.0);
+        float tone = toneMod * cryptFade * (1.0 + crC.y * 0.34 + onCrown * 0.36) * (1.0 - fur);
+
+        float colEnv = exp(-pow((u - 0.32) / 0.25, 2.0));
+        float pupEnv = 1.0 - smoothstep(0.0, 0.32, u);
+        float radShift = colU * colEnv + wob * pupEnv;
+
+        return vec3(flow + deflect, radShift, max(0.08, tone));
+      }
+
+      void main() {
+        float th = (v_uv.x - 0.5) * 6.2831853;
+        float u = v_uv.y;
+        // Slow time progression through 3D noise space
+        float z = u_time * 0.032;
+
+        vec3 st0 = evalState(th, u, 0.0);
+        vec3 stT = evalState(th, u, z);
+
+        float dTheta  = clamp((stT.x - st0.x) / 0.14 + 0.5, 0.0, 1.0);
+        float dRadial = clamp((stT.y - st0.y) / 0.16 + 0.5, 0.0, 1.0);
+        float tRatio  = clamp((stT.z / st0.z) / 2.4, 0.0, 1.0);
+
+        // 7. High-frequency 3D micro-noise for ruff crenulations, strand micro-wiggle & mist streaks
+        float cx = cos(th), sy = sin(th);
+        float m0 = fbm2(vec3(cx * 22.0 + 3.1, sy * 22.0 + u * 14.0 - 5.7, 0.0));
+        float mT = fbm2(vec3(cx * 22.0 + 3.1, sy * 22.0 + u * 14.0 - 5.7, z * 1.45));
+        float dMicro = clamp((mT - m0) * 1.4 + 0.5, 0.0, 1.0);
+
+        gl_FragColor = vec4(dTheta, dRadial, tRatio, dMicro);
+      }
+    `;
+
     const vsSource = `
       attribute vec4 a_posData;   // x: u (or driftSpan), y: cosTh, z: sinTh, w: pupilWobble
       attribute vec4 a_styleData; // x: lum, y: radiusScale, z: alpha, w: packedSeedMode
@@ -603,6 +812,7 @@
       uniform float u_time;
       uniform vec2 u_lightDir;
       uniform sampler2D u_dispTex;
+      uniform sampler2D u_noiseTex;
 
       varying float v_lum;
       varying float v_alpha;
@@ -621,42 +831,52 @@
         float isIris = step(1.5, seedMode) * (1.0 - isMist);
         float seed = seedMode - isIris * 2.0 - isMist * 4.0;
 
-        // Ultra-slow glacial rotation of the whole iris (~14 minutes per revolution, ~0.0075 rad/s)
-        float slowSpin = sin(u_time * 0.055) * 0.038 + u_time * 0.0045;
-        float cs = cos(slowSpin), ss = sin(slowSpin);
+        // Sample 3D time-evolving noise delta texture at particle's polar coordinate
+        float sAng = atan(sinT, cosT) * 0.15915494 + 0.5;
+        float uSample = isIris > 0.5 ? clamp(u, 0.0, 1.0) : (isMist > 0.5 ? 0.99 : 0.02);
+        vec4 nField = texture2D(u_noiseTex, vec2(sAng, uSample));
+        float dThetaNoise  = (nField.r - 0.5) * 0.14;
+        float dRadialNoise = (nField.g - 0.5) * 0.16;
+        float toneNoiseMul = nField.b * 2.4;
+        float dMicroNoise  = (nField.a - 0.5);
+
+        // Apply 3D noise angular evolution + ultra-slow glacial drift
+        float slowSpin = sin(u_time * 0.045) * 0.028 + u_time * 0.0035;
+        float angShift = slowSpin + (isIris > 0.5 ? (dThetaNoise + dMicroNoise * 0.010) : (dMicroNoise * 0.008));
+        float cs = cos(angShift), ss = sin(angShift);
         vec2 radDir = vec2(cosT * cs - sinT * ss, cosT * ss + sinT * cs);
 
-        float pf = u_pupilFrac + wob;
+        float pf = u_pupilFrac + wob + (u < 0.08 ? dRadialNoise * 0.45 : 0.0);
         float rFrac;
         float alphaMod = 1.0;
         float lumMod = 1.0;
 
         if (isIris > 0.5) {
-          // Slow accordion flexing & subtle organic peristaltic sand wave as the pupil dilates/contracts
-          float dilation = (u_pupilFrac - 0.235) / 0.048;
-          float sinMid = sin(u * 3.14159265);
-          // Smooth 3-lobe angular harmonic from radDir without needing atan()
+          float sinMid = sin(clamp(u, 0.0, 1.0) * 3.14159265);
+          float dilation = (u_pupilFrac - 0.238) / 0.048;
           float angHarm = radDir.y * (3.0 * radDir.x * radDir.x - radDir.y * radDir.y);
-          float flexTwist = dilation * sinMid * (0.024 + 0.010 * angHarm)
-                          + sin(u * 5.2 - u_time * 0.20 + angHarm * 1.8) * 0.0045 * sinMid;
+          float flexTwist = dilation * sinMid * (0.020 + 0.008 * angHarm);
           float cf = cos(flexTwist), sf = sin(flexTwist);
           radDir = vec2(radDir.x * cf - radDir.y * sf, radDir.x * sf + radDir.y * cf);
 
-          float radialWave = sin(u * 6.5 - u_time * 0.24 + seed * 1.4 + angHarm * 1.5) * 0.0032 * sinMid;
-          rFrac = pf + u * (1.0 - pf) + radialWave;
+          // Radial coordinate morphs with time-evolving collarette wreath, pupil contour & ruff crenulations
+          float ruffCren = (1.0 - smoothstep(0.0, 0.04, u)) * dMicroNoise * 0.014;
+          float uAnim = clamp(u + dRadialNoise * (0.25 + 0.75 * sinMid) + ruffCren, -0.018, 1.0);
+          rFrac = pf + uAnim * (1.0 - pf);
+          lumMod = mix(1.0, toneNoiseMul, 0.88);
         } else if (isMist > 0.5) {
-          // Slow continuous aeolian sand grains lifting off the limbal rim and drifting into the void (~40-65s cycle)
+          // Mist streak length & density also modulate with the 3D time-evolving micro-noise
           float speed = 0.014 + 0.013 * fract(seed * 7.31);
           float life = fract(seed * 13.37 + u_time * speed);
           float easeLife = pow(life, 1.35);
-          float driftU = 0.986 + easeLife * u;
+          float animSpan = u * clamp(1.0 + dMicroNoise * 0.95, 0.35, 1.85);
+          float driftU = 0.986 + easeLife * animSpan;
           float curl = easeLife * easeLife * 0.11 * (radDir.x * u_lightDir.y - radDir.y * u_lightDir.x);
           float cc = cos(curl), sc = sin(curl);
           radDir = vec2(radDir.x * cc - radDir.y * sc, radDir.x * sc + radDir.y * cc);
           rFrac = 1.0 + (driftU - 1.0) * 0.78;
-          // Smoothly materialize at the rim and dissolve softly into darkness
           alphaMod = smoothstep(0.0, 0.14, life) * (1.0 - smoothstep(0.45, 1.0, life));
-          lumMod = 1.0 - easeLife * 0.62;
+          lumMod = (1.0 - easeLife * 0.62) * clamp(1.0 + dMicroNoise * 0.45, 0.55, 1.45);
         } else if (u < 0.0) {
           rFrac = (-u) * pf;
         } else {
@@ -752,28 +972,36 @@
 
     const vs = compile(gl.VERTEX_SHADER, vsSource);
     const fs = compile(gl.FRAGMENT_SHADER, fsSource);
-    if (vs && fs) {
+    const nvs = compile(gl.VERTEX_SHADER, noiseVsSource);
+    const nfs = compile(gl.FRAGMENT_SHADER, noiseFsSource);
+    if (vs && fs && nvs && nfs) {
       prog = gl.createProgram();
       gl.attachShader(prog, vs);
       gl.attachShader(prog, fs);
       gl.linkProgram(prog);
-      if (gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+
+      noiseProg = gl.createProgram();
+      gl.attachShader(noiseProg, nvs);
+      gl.attachShader(noiseProg, nfs);
+      gl.linkProgram(noiseProg);
+
+      if (gl.getProgramParameter(prog, gl.LINK_STATUS) && gl.getProgramParameter(noiseProg, gl.LINK_STATUS)) {
         glReady = true;
       }
     }
   }
 
   if (glReady) {
-    gl.useProgram(prog);
     vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    quadVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+    const aQuad = gl.getAttribLocation(noiseProg, 'a_quad');
+    uNoiseTime = gl.getUniformLocation(noiseProg, 'u_time');
 
     const aPos = gl.getAttribLocation(prog, 'a_posData');
     const aStyle = gl.getAttribLocation(prog, 'a_styleData');
-    gl.enableVertexAttribArray(aPos);
-    gl.enableVertexAttribArray(aStyle);
-    gl.vertexAttribPointer(aPos,   4, gl.FLOAT, false, 32, 0);
-    gl.vertexAttribPointer(aStyle, 4, gl.FLOAT, false, 32, 16);
 
     dispTex = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
@@ -783,6 +1011,21 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+    noiseTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, NOISE_W, NOISE_H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    noiseFbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, noiseFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, noiseTex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    gl.useProgram(prog);
     uRes       = gl.getUniformLocation(prog, 'u_res');
     uDpr       = gl.getUniformLocation(prog, 'u_dpr');
     uOuterR    = gl.getUniformLocation(prog, 'u_outerR');
@@ -790,6 +1033,7 @@
     uTime      = gl.getUniformLocation(prog, 'u_time');
     uLightDir  = gl.getUniformLocation(prog, 'u_lightDir');
     gl.uniform1i(gl.getUniformLocation(prog, 'u_dispTex'), 0);
+    gl.uniform1i(gl.getUniformLocation(prog, 'u_noiseTex'), 1);
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -871,6 +1115,7 @@
         dispTexBytes[b + 3] = ((ny - iy) * 255.0) | 0;
       }
 
+      gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, dispTex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, GRID, GRID, 0, gl.RGBA, gl.UNSIGNED_BYTE, dispTexBytes);
     }
@@ -887,7 +1132,35 @@
 
       updateSandBrushField(outerR);
 
+      // Pass 1: Update 3D time-animated polar noise field FBO across all iris noise functions
+      gl.bindFramebuffer(gl.FRAMEBUFFER, noiseFbo);
+      gl.viewport(0, 0, NOISE_W, NOISE_H);
+      gl.disable(gl.BLEND);
+      gl.useProgram(noiseProg);
+      gl.uniform1f(uNoiseTime, t);
+      gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+      gl.disableVertexAttribArray(aPos);
+      gl.disableVertexAttribArray(aStyle);
+      gl.enableVertexAttribArray(aQuad);
+      gl.vertexAttribPointer(aQuad, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disableVertexAttribArray(aQuad);
+
+      // Pass 2: Render ~2.2M fine sand particles driven by the time-evolving 3D noise field
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, pw, ph);
+      gl.enable(gl.BLEND);
       gl.clear(gl.COLOR_BUFFER_BIT);
+
+      gl.useProgram(prog);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.enableVertexAttribArray(aPos);
+      gl.enableVertexAttribArray(aStyle);
+      gl.vertexAttribPointer(aPos,   4, gl.FLOAT, false, 32, 0);
+      gl.vertexAttribPointer(aStyle, 4, gl.FLOAT, false, 32, 16);
+
       gl.uniform2f(uRes, pw, ph);
       gl.uniform1f(uDpr, dpr);
       gl.uniform1f(uOuterR, outerR);
@@ -935,17 +1208,60 @@
     window.addEventListener('resize', resize2d);
     resize2d();
 
+    const G2_A = 128, G2_R = 48;
+    const dThGrid  = new Float32Array(G2_A * G2_R);
+    const dRadGrid = new Float32Array(G2_A * G2_R);
+    const lumGrid  = new Float32Array(G2_A * G2_R);
+    const refFlow  = new Float32Array(G2_A * G2_R);
+    const refRad   = new Float32Array(G2_A * G2_R);
+    const refTone  = new Float32Array(G2_A * G2_R);
+
+    function evalJsState(th, u, z) {
+      const cx = Math.cos(th), sy = Math.sin(th);
+      const colU = 0.312 + (fbm(cx * 2.6 + 8.3, sy * 2.6 - 4.1, 3, z * 0.7) - 0.5) * 0.11;
+      const wob  = (fbm(cx * 2.7 + 1.9, sy * 2.7 - 2.7, 2, z * 0.8) - 0.5) * 0.014;
+      const flow = (fbm(cx * 3.4 + u * 2.3, sy * 3.4 - u * 2.3, 3, z * 0.95 - u * 0.12) - 0.5) * 0.062 * Math.sin(u * Math.PI);
+      const comb = 0.5 * fbm(cx * 13.5 + 4.1, sy * 13.5 + u * 4.6, 3, z * 1.1) + 0.5 * fbm(cx * 15.0 - 8.3, sy * 15.0 - u * 4.2, 3, -z * 1.05);
+      const peri = Math.exp(-Math.pow((u - colU - 0.035) / 0.145, 2));
+      const crypt = smoothstep(0.46, 0.24, comb) * peri;
+      const ridge = smoothstep(0.54, 0.78, comb) * (0.35 + peri * 0.65);
+      const sec  = 0.78 + fbm(cx * 2.1 + 3.1, sy * 2.1 - 2.4, 3, z * 0.6) * 0.38;
+      const tone = Math.max(0.08, sec * (0.24 + 0.76 * Math.exp(-crypt * 2.0)) * (1.0 + ridge * 0.34));
+      const radS = colU * Math.exp(-Math.pow((u - 0.32) / 0.25, 2)) + wob * (1.0 - smoothstep(0.0, 0.32, u));
+      return [flow, radS, tone];
+    }
+
+    for (let a = 0; a < G2_A; a++) {
+      const th = (a / G2_A) * TWO_PI;
+      for (let r = 0; r < G2_R; r++) {
+        const s0 = evalJsState(th, r / (G2_R - 1), 0);
+        const k = a * G2_R + r;
+        refFlow[k] = s0[0]; refRad[k] = s0[1]; refTone[k] = s0[2];
+      }
+    }
+
     const startTime = performance.now();
     function frame2d(now) {
       const t = (now - startTime) * 0.001;
+      const z = t * 0.032;
+      for (let a = 0; a < G2_A; a++) {
+        const th = (a / G2_A) * TWO_PI;
+        for (let r = 0; r < G2_R; r++) {
+          const st = evalJsState(th, r / (G2_R - 1), z);
+          const k = a * G2_R + r;
+          dThGrid[k]  = st[0] - refFlow[k];
+          dRadGrid[k] = st[1] - refRad[k];
+          lumGrid[k]  = st[2] / refTone[k];
+        }
+      }
+
       buf.fill(0);
       for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
 
       const cx = pw * 0.5, cy = ph * 0.5;
       const outerR = Math.min(pw, ph) * 0.415;
       const pupilFrac = 0.238 + Math.sin(t * 0.26) * 0.036 + Math.sin(t * 0.11 + 1.2) * 0.012;
-      const slowSpin = Math.sin(t * 0.055) * 0.038 + t * 0.0045;
-      const cs = Math.cos(slowSpin), ss = Math.sin(slowSpin);
+      const slowSpin = Math.sin(t * 0.045) * 0.028 + t * 0.0035;
       const data = sand.data;
 
       for (let i = 0, end = sand.count * 8; i < end; i += 8) {
@@ -956,9 +1272,18 @@
         const seed = sm - (isIris ? 2.0 : (isMist ? 4.0 : 0.0));
         const pf = pupilFrac + data[i + 3];
 
+        const ang0 = Math.atan2(data[i + 2], data[i + 1]);
+        const ai = (((ang0 / TWO_PI + 1.0) % 1.0) * G2_A) | 0;
+        const ri = (Math.max(0, Math.min(1, isIris ? u : 0.99)) * (G2_R - 1)) | 0;
+        const gk = ai * G2_R + ri;
+
         let rFrac, aScale = 1.0, lScale = 1.0;
+        let angShift = slowSpin;
         if (isIris) {
-          rFrac = pf + u * (1.0 - pf);
+          angShift += dThGrid[gk];
+          const uAnim = Math.max(-0.018, Math.min(1.0, u + dRadGrid[gk] * (0.25 + 0.75 * Math.sin(Math.max(0, Math.min(1, u)) * Math.PI))));
+          rFrac = pf + uAnim * (1.0 - pf);
+          lScale = Math.min(1.8, lumGrid[gk]);
         } else if (isMist) {
           const life = (seed * 13.37 + t * (0.014 + 0.013 * ((seed * 7.31) % 1))) % 1;
           const ease = Math.pow(life, 1.35);
@@ -968,6 +1293,8 @@
         } else {
           rFrac = u < 0 ? (-u) * pf : 1.0 + (u - 1.0) * 0.76;
         }
+
+        const cs = Math.cos(angShift), ss = Math.sin(angShift);
 
         const rx = data[i + 1] * cs - data[i + 2] * ss;
         const ry = data[i + 1] * ss + data[i + 2] * cs;
