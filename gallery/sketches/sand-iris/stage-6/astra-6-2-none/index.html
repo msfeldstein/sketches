@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Iris · Sand study</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050505}canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas aria-label="A circular iris formed from thousands of graphite, silver, and chalk-white sand grains surrounding a deep black pupil." role="img"></canvas>
+<script>
+'use strict';
+const display=document.querySelector('canvas');
+const tau=Math.PI*2, clamp=x=>Math.max(0,Math.min(1,x));
+function generator(seed){
+  return ()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
+}
+const palettes=[
+ [4,35,142,244],
+ [6,49,166,252],
+ [8,63,192,255],
+ [9,72,208,255],
+ [4,29,117,231],
+ [2,16,64,166]
+].map(ramp=>ramp.map(gray=>[gray,gray,gray]));
+// Periodic value noise in angle, with independent, smoothly interpolated time slices.
+function hash(x,y,seed){
+ let h=Math.imul(x+seed,0x85ebca6b)^Math.imul(y,0xc2b2ae35);
+ h=Math.imul(h^(h>>>16),0x7feb352d);
+ return ((h^(h>>>15))>>>0)/4294967296;
+}
+function smooth(x){return x*x*(3-2*x)}
+function blend(a,b,t){return a+(b-a)*t}
+function temporal(id,t,seed){
+ const k=Math.floor(t);
+ return blend(hash(id,k,seed),hash(id,k+1,seed),smooth(t-k));
+}
+function angularFields(time){
+ const bins=4096;
+ const tables=[19,47,109,241].map((n,k)=>{
+  const knots=Array.from({length:n},(_,i)=>temporal(i,time*(.026+.004*k)+k*.71,57+k*103));
+  const table=new Float32Array(bins+1);
+  for(let j=0;j<bins;j++){
+   const u=j*n/bins,i=Math.floor(u);
+   table[j]=blend(knots[i],knots[(i+1)%n],smooth(u-i));
+  }
+  table[bins]=table[0];
+  return table;
+ });
+ return (k,a)=>{
+  const u=a*bins/tau,i=Math.floor(u),j=i&(bins-1);
+  return blend(tables[k][j],tables[k][j+1],u-i);
+ };
+}
+let anchors,count,dust,R,d,unit;
+const interval=.75;
+function sample(seconds){
+ // Start between noise slices so the first few seconds already show motion.
+ const time=seconds*3.4+5.2;
+ const field=angularFields(time),sin=Math.sin,cos=Math.cos;
+ const opening=.15*(1-Math.exp(-seconds/8));
+ const innerRadius=.25+opening;
+
+ function collar(a){return .464+.031*sin(7*a+.6)+.016*sin(14*a)+.074*(field(1,a)-.5)}
+ const data=new Float32Array((count+dust)*4);
+ function fill(start,end){
+ for(let i=start;i<end;i++){
+  const j=i*4;
+  if(i>=count){
+   data[j]=anchors[i*2];data[j+1]=anchors[i*2+1];
+   data[j+2]=Math.hypot(data[j],data[j+1])<R*d*innerRadius?0:(.45+hash(i,0,33))*d;data[j+3]=.035+.045*hash(i,0,34);
+   continue;
+  }
+  // Integrate a positive, grain-specific velocity. The independent phases
+  // let one grain nearly stall while an adjacent one slips past it.
+  const speed=.0025+.039*hash(i,0,417)**2;
+  const cadence=.44+.85*hash(i,0,213);
+  const phase=tau*hash(i,0,719);
+  const distance=speed*(seconds+.96*(sin(seconds*cadence+phase)-sin(phase))/cadence);
+  const age=(anchors[2*i+1]+distance)%1;
+  const area=clamp((age-.055)/.89);
+  const displaced=Math.sqrt(.0625+.9375*area);
+  // Local sideways slip is independent of the angular fields used for shading.
+  const slip=temporal(i,seconds*(.22+.19*hash(i,0,81))+phase,547)-.5;
+  const a=anchors[2*i]+(.004+.025*hash(i,0,49))*slip/displaced;
+  const tissueArea=clamp((displaced**2-innerRadius**2)/(1-innerRadius**2));
+  const r=Math.sqrt(.0625+.9375*tissueArea);
+  const edge=1+.002*sin(9*a)+.002*sin(17*a)+.0018*(field(2,a)-.5);
+  const pupil=.253+.0025*sin(5*a)+.0018*sin(9*a);
+  const c=collar(a),outer=r-c;
+  const bend=a+.039*sin(6*a+3*r)+.026*sin(18*a-4*r)+.021*sin(9*r+11*a);
+  const wide=field(0,bend),strand=field(2,bend),fine=field(3,bend+.004*sin(22*r+8*a));
+  const crypt=Math.exp(-Math.pow((outer-.045)/(.046+.051*wide),2))*clamp((field(1,bend)-.39)*2.5);
+  const ridge=Math.exp(-Math.abs(outer)/.017);
+  const limb=clamp((r-.887)/.108);
+  let light=.26+.25*wide+.33*(strand-.35)+.21*(fine-.4)+.09*sin(11*r-2*a);
+  // Raking light breaks across the raised bundles and the folded collar.
+  const rake=.5+.5*cos(a+2.25+.33*sin(time*.12));
+  const crest=clamp((strand+.36*fine-.70)*2.9);
+  light=(light-.39)*1.32+.36;
+  light+=ridge*(.26+.22*rake)-crypt*.57-limb*limb*.52;
+  light+=crest*(.08+.19*rake)+.14*(rake-.5);
+  // Broken peripheral contraction furrows run across the radial tissue.
+  const fold=.5+.5*cos(129*r+3*sin(4*a)+1.5*sin(9*a));
+  light-=.14*fold**7*clamp((r-.67)*8)*field(0,a+1);
+  const inner=clamp((c-r+.019)/.135);
+  light-=.16*inner+.25*Math.exp(-Math.abs(r-pupil)/.016);
+  let warmth=inner*.82+ridge*.63+.58*field(0,bend+.04)+.21*strand+.17*sin(a*3+.6);
+  const jitter=temporal(i,time*.053,91); warmth+=(jitter-.5)*.44;
+  let p=warmth>1.00?3:warmth>.77?2:field(1,bend+.13)+.24*sin(3*a)>.65?4:wide>.51?1:0;
+  if(r>edge-.017||r<pupil+.007)p=5;
+  if(r>edge-.008)light-=.16;
+  light+=(temporal(i,time*.062,145)-.48)*.49;
+  light+=.34*smooth(clamp((.045-temporal(i,time*.039,227))/.03));
+  const size=(.70+1.84*temporal(i,time*.031,89)**2)*unit*(1+.23*ridge);
+  const fade=smooth(clamp((age-.055)/.025))*smooth(clamp((.945-age)/.035));
+  const visible=fade*smooth(clamp((displaced-innerRadius)/.018))*clamp((r-pupil+.003)/.002)*clamp((edge+.005-r)/.002);
+  const v=clamp(light)*2.999,k=Math.floor(v),ramp=palettes[p];
+  data[j]=R*d*displaced*cos(a);data[j+1]=R*d*displaced*sin(a);
+  data[j+2]=size*d*visible;data[j+3]=blend(ramp[k][0],ramp[k+1][0],v-k)/255;
+ }
+ }
+ return {data,fill};
+}
+const gl=display.getContext('webgl',{alpha:false,depth:false,antialias:false});
+let upload,draw;
+if(gl){
+ const program=gl.createProgram();
+ function attach(type,source){
+  const shader=gl.createShader(type);
+  gl.shaderSource(shader,source);gl.compileShader(shader);
+  if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(shader));
+  gl.attachShader(program,shader);
+ }
+ attach(gl.VERTEX_SHADER,`attribute vec4 previous,current;
+ uniform vec2 viewport;
+ uniform float fraction;
+ varying float value,diameter;
+ void main(){
+  vec4 g=mix(previous,current,fraction);
+  gl_Position=vec4(g.xy*vec2(2.,-2.)/viewport,0.,1.);
+  diameter=g.z;gl_PointSize=max(1.,g.z);value=g.w;
+ }`);
+ attach(gl.FRAGMENT_SHADER,`precision mediump float;
+ varying float value,diameter;
+ void main(){
+  vec2 p=gl_PointCoord-0.5;
+  float edge=max(max(abs(p.x)*1.05,abs(p.y)*1.25),max(abs(p.x+.64*p.y),abs(p.y-.66*p.x)));
+  float opacity=(1.-smoothstep(.31,.52,edge))*min(1.,diameter*diameter);
+  float facet=.16*(1.-smoothstep(-.27,-.15,p.y+.4*p.x));
+  gl_FragColor=vec4(vec3(mix(value,1.,facet)),opacity);
+ }`);
+ gl.linkProgram(program);gl.useProgram(program);
+ const buffers=[gl.createBuffer(),gl.createBuffer()];
+ const locations=['previous','current'].map(n=>gl.getAttribLocation(program,n));
+ const fraction=gl.getUniformLocation(program,'fraction'),viewport=gl.getUniformLocation(program,'viewport');
+ gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+ gl.clearColor(5/255,5/255,5/255,1);
+ upload=(slot,data)=>{
+  gl.bindBuffer(gl.ARRAY_BUFFER,buffers[slot]);gl.bufferData(gl.ARRAY_BUFFER,data,gl.DYNAMIC_DRAW);
+ };
+ draw=(slot,t)=>{
+  gl.viewport(0,0,display.width,display.height);gl.clear(gl.COLOR_BUFFER_BIT);
+  for(let k=0;k<2;k++){
+   gl.bindBuffer(gl.ARRAY_BUFFER,buffers[(slot+k)%2]);
+   gl.enableVertexAttribArray(locations[k]);gl.vertexAttribPointer(locations[k],4,gl.FLOAT,false,0,0);
+  }
+  gl.uniform2f(viewport,display.width,display.height);gl.uniform1f(fraction,t);
+  gl.drawArrays(gl.POINTS,0,count+dust);
+ };
+}else{
+ const ctx=display.getContext('2d'),frames=[];
+ const inks=Array.from({length:256},(_,i)=>'rgb('+[i,i,i].join(',')+')');
+ upload=(slot,data)=>frames[slot]=data;
+ draw=(slot,t)=>{
+  const a=frames[slot],b=frames[1-slot];
+  ctx.setTransform(1,0,0,1,display.width/2,display.height/2);
+  ctx.clearRect(-display.width/2,-display.height/2,display.width,display.height);
+  for(let j=0;j<a.length;j+=4){
+   const s=blend(a[j+2],b[j+2],t)*.75;
+   const x=blend(a[j],b[j],t),y=blend(a[j+1],b[j+1],t);
+   ctx.fillStyle=inks[Math.round(255*blend(a[j+3],b[j+3],t))];
+   ctx.fillRect(x-s/2,y-s*.44,s,s*.88);
+  }
+ };
+}
+let dirty=true,slot=0,elapsed=0,last=0,sampleTime=0,next,completed;
+function rebuild(){
+ d=(window.devicePixelRatio||1);R=.462*Math.min(innerWidth,innerHeight);
+ display.width=Math.round(innerWidth*d);display.height=Math.round(innerHeight*d);
+ count=Math.min(gl?380000:55000,Math.max(48000,Math.round(R*R*2.6)));
+ dust=Math.round(innerWidth*innerHeight/70);
+ unit=R/Math.sqrt(count/2.6);
+ anchors=new Float32Array(2*(count+dust));
+ const rand=generator(86142);
+ for(let i=0;i<count+dust;i++){
+  anchors[2*i]=i<count?rand()*tau:(rand()-.5)*display.width;
+  anchors[2*i+1]=i<count?rand():(rand()-.5)*display.height;
+ }
+ for(let k=0;k<2;k++){
+  const frame=sample(sampleTime+k*interval);frame.fill(0,count+dust);upload((slot+k)%2,frame.data);
+ }
+ next=sample(sampleTime+2*interval);completed=0;elapsed=0;
+}
+window.addEventListener('resize',()=>{dirty=true});
+function animate(timestamp){
+ if(dirty||d!==(window.devicePixelRatio||1)){rebuild();dirty=false;last=timestamp}
+ elapsed+=Math.min(interval,(timestamp-last)*.001);last=timestamp;
+ const total=count+dust;
+ // Prepare the following time slice progressively while the GPU interpolates
+ // the two complete particle states. Particle identities persist across slices.
+ const end=Math.min(total,Math.ceil(total*Math.min(1,(elapsed+.04)/interval)));
+ next.fill(completed,end);completed=end;
+ if(elapsed>=interval){
+  upload(slot,next.data);slot=1-slot;sampleTime+=interval;elapsed-=interval;
+  next=sample(sampleTime+2*interval);completed=0;
+ }
+ draw(slot,elapsed/interval);
+ requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
