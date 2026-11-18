@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sand Iris</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #060505; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c" title="click for a new iris"></canvas>
+<script>
+(() => {
+'use strict';
+
+const TAU = Math.PI * 2;
+const canvas = document.getElementById('c');
+
+// ---------- utilities ----------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+function smooth(a, b, x) { let t = (x - a) / (b - a); t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+const sq = x => x * x;
+
+// Periodic 1D value noise over the angle, and 2D noise periodic in angle (sampled from time slices).
+function pn(t, th) {
+  const n = t.length; const x = th / TAU * n;
+  const xf = Math.floor(x); let f = x - xf;
+  const i = ((xf % n) + n) % n; const j = (i + 1) % n;
+  f = f * f * (3 - 2 * f);
+  return t[i] + (t[j] - t[i]) * f;
+}
+function p2(t, th, v) {
+  const px = t.px, py = t.py;
+  const x = th / TAU * px;
+  const xf = Math.floor(x), yf = Math.floor(v);
+  let fx = x - xf, fy = v - yf;
+  const i0 = ((xf % px) + px) % px, i1 = (i0 + 1) % px;
+  const j0 = ((yf % py) + py) % py, j1 = (j0 + 1) % py;
+  fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+  const a = t[j0 * px + i0], b = t[j0 * px + i1], c = t[j1 * px + i0], d = t[j1 * px + i1];
+  const top = a + (b - a) * fx, bot = c + (d - c) * fx;
+  return top + (bot - top) * fy;
+}
+function angDiff(a, b) { let d = a - b; d -= TAU * Math.round(d / TAU); return d; }
+
+// ---------- palettes ----------
+const PALETTES = [
+  { // silver: pale fibrous stroma, dark pupillary zone, bright collarette
+    outer: [120, 120, 120], inner: [80, 80, 80], light: [236, 236, 236], coll: [250, 250, 250],
+    dark: [4, 4, 4], limbal: [6, 6, 6], ruff: [20, 20, 20], freckle: [26, 26, 26], alt: [92, 92, 92]
+  },
+  { // graphite: dark stroma with luminous strands
+    outer: [64, 64, 64], inner: [128, 128, 128], light: [226, 226, 226], coll: [200, 200, 200],
+    dark: [2, 2, 2], limbal: [4, 4, 4], ruff: [16, 16, 16], freckle: [12, 12, 12], alt: [40, 40, 40]
+  },
+  { // chalk: bright and stark
+    outer: [168, 168, 168], inner: [96, 96, 96], light: [255, 255, 255], coll: [255, 255, 255],
+    dark: [6, 6, 6], limbal: [8, 8, 8], ruff: [24, 24, 24], freckle: [30, 30, 30], alt: [130, 130, 130]
+  }
+];
+
+// ---------- iris pattern ----------
+// Every noise table carries an extra time axis of PZ samples (wrapping seamlessly).
+// patternAt(z) slices all tables at noise-time z with Catmull-Rom interpolation,
+// and re-derives the crypts and freckles from their own time-varying parameters.
+const PZ = 64;
+const TIME_SCALE = 1 / 9;    // noise-time cells per second
+let P, T = {}, T3 = {}, crypts = [], rowCrypts = [], freckles = [], cryptBase = [], freckleBase = [];
+let colR, colG, colB, colDens; // outputs of irisColor
+
+function ttable(px, py, speed, rnd) {
+  const n = px * py;
+  const data = new Float32Array(n * PZ);
+  for (let i = 0; i < data.length; i++) data[i] = rnd();
+  const slice = new Float32Array(n); slice.px = px; slice.py = py;
+  return { data, n, speed, slice };
+}
+function sliceAt(tb, z) {
+  const zz = z * tb.speed, zi = Math.floor(zz), f = zz - zi;
+  const n = tb.n, d = tb.data, out = tb.slice;
+  const row = k => (((zi + k) % PZ) + PZ) % PZ * n;
+  const r0 = row(-1), r1 = row(0), r2 = row(1), r3 = row(2);
+  const f2 = f * f, f3 = f2 * f;
+  const w0 = -0.5 * f3 + f2 - 0.5 * f, w1 = 1.5 * f3 - 2.5 * f2 + 1;
+  const w2 = -1.5 * f3 + 2 * f2 + 0.5 * f, w3 = 0.5 * f3 - 0.5 * f2;
+  // rescale so contrast doesn't dip between time samples
+  const k = 1 / Math.sqrt(w0 * w0 + w1 * w1 + w2 * w2 + w3 * w3);
+  for (let i = 0; i < n; i++) {
+    const v = 0.5 + (d[r0 + i] * w0 + d[r1 + i] * w1 + d[r2 + i] * w2 + d[r3 + i] * w3 - 0.5) * k;
+    out[i] = v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+  return out;
+}
+
+function setupPattern(rnd) {
+  T3 = {
+    coll1: ttable(9, 1, 0.45, rnd), coll2: ttable(23, 1, 0.6, rnd), coll3: ttable(90, 1, 0.9, rnd),
+    f180: ttable(180, 1, 0.7, rnd), f420: ttable(420, 1, 0.9, rnd), f90: ttable(90, 1, 0.9, rnd),
+    warp: ttable(16, 8, 0.5, rnd), along: ttable(140, 24, 0.9, rnd),
+    spike1: ttable(52, 1, 0.6, rnd), spike2: ttable(15, 1, 0.45, rnd),
+    patch: ttable(9, 6, 0.4, rnd), fine: ttable(760, 1, 0.9, rnd), fine2: ttable(260, 1, 0.8, rnd),
+    furrowPos: ttable(15, 1, 0.5, rnd), furrowMask: ttable(22, 1, 0.7, rnd),
+    ruff: ttable(150, 1, 0.9, rnd), ruffR: ttable(60, 1, 0.7, rnd),
+    edge: ttable(30, 1, 0.6, rnd), limbBand: ttable(70, 1, 0.7, rnd),
+    flowU: ttable(20, 6, 1, rnd), flowT: ttable(20, 6, 1, rnd)
+  };
+
+  cryptBase = [];
+  const nInner = 30 + Math.floor(rnd() * 18);
+  for (let i = 0; i < nInner; i++) {
+    cryptBase.push({ inner: true, th: rnd() * TAU, uOff: 0.015 + rnd() * 0.13, lu: 0.03 + rnd() * 0.06, lt: 0.018 + rnd() * 0.04, depth: 0.8 + rnd() * 0.2 });
+  }
+  const nOuter = 26 + Math.floor(rnd() * 22);
+  for (let i = 0; i < nOuter; i++) {
+    cryptBase.push({ inner: false, th: rnd() * TAU, u: 0.62 + rnd() * 0.28, lu: 0.012 + rnd() * 0.03, lt: 0.01 + rnd() * 0.022, depth: 0.25 + rnd() * 0.35 });
+  }
+  T3.crypt = ttable(cryptBase.length * 4, 1, 1.1, rnd);
+  freckleBase = [];
+  const nf = 1 + Math.floor(rnd() * 5);
+  for (let i = 0; i < nf; i++) {
+    freckleBase.push({ th: rnd() * TAU, u: 0.5 + rnd() * 0.35, r: 0.012 + rnd() * 0.025 });
+  }
+  T3.freck = ttable(nf * 3, 1, 0.6, rnd);
+}
+
+function patternAt(z) {
+  for (const k in T3) T[k] = sliceAt(T3[k], z);
+  const cs = T.crypt;
+  crypts = [];
+  for (let k = 0; k < cryptBase.length; k++) {
+    const cb = cryptBase[k], o = k * 4;
+    const depth = cb.depth * smooth(0.28, 0.6, cs[o]);
+    if (depth < 0.02) continue;
+    const th = cb.th + 0.22 * (cs[o + 1] - 0.5);
+    const sc = 0.7 + 0.6 * cs[o + 3];
+    const u = cb.inner ? collR(th) + cb.uOff + 0.04 * (cs[o + 2] - 0.5) : cb.u + 0.05 * (cs[o + 2] - 0.5);
+    crypts.push({ th, u, lu: cb.lu * sc, lt: cb.lt * (1.3 - 0.3 * sc), depth });
+  }
+  const fs = T.freck;
+  freckles = [];
+  for (let k = 0; k < freckleBase.length; k++) {
+    const fb = freckleBase[k], o = k * 3;
+    const r = fb.r * smooth(0.3, 0.65, fs[o]);
+    if (r < 0.002) continue;
+    freckles.push({ th: fb.th + 0.15 * (fs[o + 1] - 0.5), u: fb.u + 0.06 * (fs[o + 2] - 0.5), r });
+  }
+}
+
+function collR(th) {
+  return 0.29 + 0.075 * (pn(T.coll1, th) - 0.5) + 0.04 * (pn(T.coll2, th) - 0.5) + 0.026 * (pn(T.coll3, th) - 0.5);
+}
+
+// u: 0 at pupil margin, 1 at limbus. Writes colR/G/B (0..255) and colDens (0..1).
+function irisColor(u, th) {
+  const c = collR(th);
+  const w = p2(T.warp, th, u * 3) - 0.5;
+  const thw = th + w * 0.055 + u * 0.03;
+  const thw2 = th + w * 0.09 - u * 0.025;
+  let F = 0.55 * pn(T.f180, thw) + 0.45 * pn(T.f420, thw2);
+  const along = p2(T.along, thw, u * 11);
+  F = F * 0.72 + along * 0.28;
+  const strand = smooth(0.55, 0.7, F);
+  const gap = smooth(0.45, 0.31, F);
+
+  const spikes = pn(T.spike1, th) * 0.7 + pn(T.spike2, th) * 0.3;
+  const sp = Math.pow(spikes, 2.6);
+  const tOuter = smooth(c - 0.06, c + 0.03 + 0.4 * sp, u);
+
+  let r = P.inner[0] + (P.outer[0] - P.inner[0]) * tOuter;
+  let g = P.inner[1] + (P.outer[1] - P.inner[1]) * tOuter;
+  let b = P.inner[2] + (P.outer[2] - P.inner[2]) * tOuter;
+
+  // large soft patches of hue drift
+  const pv = p2(T.patch, th, u * 2.2) - 0.5;
+  const am = clamp01(pv * 1.6) * tOuter * 0.6;
+  r += (P.alt[0] - r) * am; g += (P.alt[1] - g) * am; b += (P.alt[2] - b) * am;
+  const pl = 1 + (pv < 0 ? pv * 0.4 : 0);
+  r *= pl; g *= pl; b *= pl;
+
+  // radial fibres (trabeculae)
+  const fs = 0.55 + 0.45 * tOuter;
+  const lm = strand * 0.78 * fs;
+  r += (P.light[0] - r) * lm; g += (P.light[1] - g) * lm; b += (P.light[2] - b) * lm;
+  const dk = 1 - gap * 0.8 * fs;
+  r *= dk; g *= dk; b *= dk;
+
+  // fine striations in the pupillary zone
+  const inner = 1 - tOuter;
+  if (inner > 0.01) {
+    const fz = 0.6 * pn(T.fine, th + w * 0.04) + 0.4 * pn(T.fine2, th - w * 0.03);
+    const m = 1 + (fz - 0.5) * 0.7 * inner;
+    r *= m; g *= m; b *= m;
+  }
+
+  // collarette: a raised, zig-zag ridge with a shadow on its outer flank
+  const ridgeTex = 0.25 + 1.0 * pn(T.f90, th + w * 0.02);
+  const ridge = Math.exp(-sq((u - c) / 0.022)) * ridgeTex;
+  const rm = clamp01(ridge * 0.85);
+  r += (P.coll[0] - r) * rm; g += (P.coll[1] - g) * rm; b += (P.coll[2] - b) * rm;
+  const sh = 1 - 0.62 * Math.exp(-sq((u - c - 0.038) / 0.02));
+  r *= sh; g *= sh; b *= sh;
+
+  // darker near the pupil margin
+  const pm = 0.62 + 0.38 * smooth(0.0, 0.13, u);
+  r *= pm; g *= pm; b *= pm;
+
+  // contraction furrows
+  const rings = [0.6, 0.7, 0.8, 0.885];
+  for (let k = 0; k < 4; k++) {
+    const rr = rings[k] + 0.024 * (pn(T.furrowPos, th + rings[k] * 7) - 0.5);
+    const mask = smooth(0.38, 0.62, pn(T.furrowMask, th + rings[k] * 3.1));
+    const f = Math.exp(-sq((u - rr) / 0.0065)) * mask;
+    const hl = Math.exp(-sq((u - rr + 0.012) / 0.006)) * mask;
+    const fm = (1 - 0.55 * f) * (1 + 0.2 * hl);
+    r *= fm; g *= fm; b *= fm;
+  }
+
+  // crypts (lacunae)
+  let kd = 0, rim = 0;
+  for (let k = 0; k < rowCrypts.length; k++) {
+    const cr = rowCrypts[k];
+    const du = (u - cr.u) / cr.lu;
+    if (du < -1.4 || du > 1.4) continue;
+    const dth = angDiff(th, cr.th);
+    const lt = cr.lt * (1 - 0.45 * du);
+    if (Math.abs(dth) > lt * 1.5) continue;
+    const dd = du * du + sq(dth / lt);
+    const d = smooth(1.0, 0.45, dd) * cr.depth;
+    if (d > kd) kd = d;
+    const rv = Math.exp(-sq((dd - 1.05) / 0.2)) * cr.depth;
+    if (rv > rim) rim = rv;
+  }
+  if (kd > 0 || rim > 0) {
+    const deep = 0.6 + 0.8 * F;
+    const m = kd * 0.97;
+    r += (P.dark[0] * deep - r) * m; g += (P.dark[1] * deep - g) * m; b += (P.dark[2] * deep - b) * m;
+    const rm2 = 1 + rim * 0.5 * (1 - kd);
+    r *= rm2; g *= rm2; b *= rm2;
+  }
+
+  // freckles (nevi)
+  for (let k = 0; k < freckles.length; k++) {
+    const fr = freckles[k];
+    const d = sq((u - fr.u) / fr.r) + sq(angDiff(th, fr.th) * (0.3 + 0.7 * u) / fr.r);
+    if (d < 1.6) {
+      const m = smooth(1.6, 0.4, d) * 0.85;
+      r += (P.freckle[0] - r) * m; g += (P.freckle[1] - g) * m; b += (P.freckle[2] - b) * m;
+    }
+  }
+
+  // pupillary ruff: crinkled dark-brown beads at the pupil margin
+  const ruffW = 0.026 + 0.014 * pn(T.ruffR, th);
+  if (u < ruffW + 0.012) {
+    const bead = 0.55 + 0.8 * pn(T.ruff, th);
+    const m = smooth(ruffW + 0.012, ruffW - 0.006, u);
+    r += (P.ruff[0] * bead - r) * m; g += (P.ruff[1] * bead - g) * m; b += (P.ruff[2] * bead - b) * m;
+  }
+
+  // limbal ring
+  const edge = 1 + 0.014 * (pn(T.edge, th) - 0.5);
+  const lim = smooth(0.78, edge, u) * (0.82 + 0.18 * pn(T.limbBand, th));
+  r += (P.limbal[0] - r) * lim; g += (P.limbal[1] - g) * lim; b += (P.limbal[2] - b) * lim;
+  let dens = 1 - kd * 0.35;
+  if (u > edge) {
+    const fo = smooth(edge, edge + 0.075, u);
+    r *= 1 - fo * 0.4; g *= 1 - fo * 0.4; b *= 1 - fo * 0.4;
+    dens *= 1 - fo * 0.85;
+  }
+
+  colR = r; colG = g; colB = b; colDens = dens;
+}
+
+// ---------- pattern grid ----------
+// The iris pattern lives on a polar grid (u x angle) holding value, density and a
+// placement flow offset per cell. Keyframes DELTA seconds apart are blended on the
+// GPU while the next keyframe is computed a few rows at a time.
+let W = 0, H = 0, dpr = 1, R = 0, cx = 0, cy = 0;
+const DELTA = 4;
+const U0 = -0.03, U1 = 1.17;
+let GN_U = 0, GN_T = 0, gridA, gridB, gridN, gRow = 0, gTA = 0, tp = 0;
+
+function computeRows(grid, from, to) {
+  for (let iu = from; iu < to; iu++) {
+    const u = U0 + (U1 - U0) * iu / (GN_U - 1);
+    rowCrypts = crypts.filter(cr => Math.abs(u - cr.u) < cr.lu * 1.4);
+    let o = iu * GN_T * 4;
+    for (let it = 0; it < GN_T; it++, o += 4) {
+      const th = it / GN_T * TAU;
+      irisColor(u, th);
+      grid[o] = 0.3 * colR + 0.59 * colG + 0.11 * colB;
+      grid[o + 1] = colDens;
+      grid[o + 2] = 0.028 * (p2(T.flowU, th, u * 4) - 0.5);
+      grid[o + 3] = 0.024 * (p2(T.flowT, th, u * 4) - 0.5);
+    }
+  }
+}
+function beginGrid(time) { patternAt(time * TIME_SCALE); gRow = 0; }
+function workGrid(rows, budgetMs) {
+  const end = performance.now() + budgetMs;
+  while (gRow < GN_U && (rows-- > 0 || performance.now() < end)) { computeRows(gridN, gRow, gRow + 1); gRow++; }
+}
+function sizeGrids() {
+  GN_T = Math.max(512, Math.min(2048, Math.round(TAU * R / dpr * 1.1 / 1.4)));
+  GN_U = Math.max(64, Math.min(200, Math.round(R / dpr * 0.85 / 2)));
+}
+function initGrids() {
+  const size = GN_U * GN_T * 4;
+  gridA = new Float32Array(size); gridB = new Float32Array(size); gridN = new Float32Array(size);
+  tp = 0; gTA = 0;
+  patternAt(0); computeRows(gridA, 0, GN_U);
+  patternAt(DELTA * TIME_SCALE); computeRows(gridB, 0, GN_U);
+  beginGrid(2 * DELTA);
+  uploadGrid(texA, gridA); uploadGrid(texB, gridB);
+}
+
+const PUPIL0 = 0.3;          // nominal pupil radius, as a fraction of iris radius
+const LIGHT0 = Math.atan2(-0.8, -0.6);
+
+// High-contrast S-curve with a soft posterize for a graphic, print-like look.
+function tone(v) {
+  let l = clamp01(v / 255);
+  l = Math.pow(l, 1.15);
+  l = l * l * (3 - 2 * l) * 0.75 + l * 0.25;
+  const q = Math.round(l * 9) / 9;
+  l = l * 0.6 + q * 0.4;
+  return l * 255;
+}
+
+// ---------- WebGL ----------
+const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, premultipliedAlpha: false });
+if (!gl) throw new Error('This sketch needs WebGL2.');
+
+function program(vs, fs) {
+  const mk = (type, src) => {
+    const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+    return sh;
+  };
+  const pr = gl.createProgram();
+  gl.attachShader(pr, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(pr);
+  if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+  const u = {};
+  const n = gl.getProgramParameter(pr, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(pr, i).name; u[name] = gl.getUniformLocation(pr, name); }
+  return { pr, u };
+}
+
+// Grain attributes (20 bytes): a, angle, unlit add | kind, size, phase, threshold | delay, mul, drift, light
+const GRAIN_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec4 aB0;
+layout(location=2) in vec4 aB1;
+uniform vec2 uRes, uC, uLight, uCatch;
+uniform float uR, uPR, uT, uRot, uAlpha, uIntro, uDpr, uMaxSize;
+uniform vec3 uGrid;
+uniform sampler2D uGA, uGB, uLut;
+out float vVal, vAlpha, vSize;
+const float TAU = 6.2831853;
+void main() {
+  float kind = floor(aB0.x * 3.0 + 0.5);
+  float size = aB0.y * uMaxSize;
+  float ph = aB0.z * TAU;
+  float a = aPos.x, th = aPos.y, raw = aPos.z;
+  if (kind < 0.5) {
+    float fu = (a - uGrid.x) / (uGrid.y - uGrid.x) * (uGrid.z - 1.0);
+    vec2 tc = vec2(th / TAU, (fu + 0.5) / uGrid.z);
+    vec4 g = mix(texture(uGA, tc), texture(uGB, tc), uAlpha);
+    if (aB0.w > g.y) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+    raw = (g.x * aB1.y * 1.3 + raw) * (1.0 + 0.1 * sin(ph * 13.0 + uT * 0.6));
+    a += g.z; th += g.w;
+  }
+  if (kind < 1.5) {
+    a += 0.018 * aB1.z * sin(ph * 4.0 + uT * 0.245);
+    th += uRot;
+  }
+  float r = kind < 0.5 ? uPR + a * (uR - uPR) : kind < 1.5 ? a * uPR : a * uR;
+  vec2 dir = vec2(cos(th), sin(th));
+  float ls = aB1.w * 1.5;
+  if (kind < 2.5) {
+    float d = dot(uLight, dir);
+    raw *= kind > 1.5 ? 1.0 + ls * max(d, 0.0) : max(0.15, 1.0 + ls * d);
+  }
+  if (uIntro > 0.5) {
+    float e = (uT - aB1.x * 2.5) / 1.7;
+    if (e <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+    if (e < 1.0) {
+      float q = pow(1.0 - e, 3.0);
+      float o = q * 2.4;
+      dir = vec2(dir.x * cos(o) - dir.y * sin(o), dir.x * sin(o) + dir.y * cos(o));
+      r *= 1.0 + q * 0.7;
+    }
+  }
+  vec2 pos = uC + r * dir + (kind > 2.5 ? uCatch : vec2(0.0));
+  pos += 0.16 * uDpr * vec2(sin(ph * 4.0 + uT * 0.38), sin(ph * 28.0 + uT * 0.38 + 1.57));
+  vec2 clip = pos / uRes * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  gl_PointSize = max(size, 1.0);
+  vAlpha = min(1.0, size * size);
+  vSize = size;
+  vVal = texture(uLut, vec2((clamp(raw * 2.0, 0.0, 1023.0) + 0.5) / 1024.0, 0.5)).r;
+}`;
+const GRAIN_FS = `#version 300 es
+precision mediump float;
+in float vVal, vAlpha, vSize;
+out vec4 o;
+void main() {
+  float v = vVal;
+  if (vSize >= 1.6) {
+    vec2 pc = gl_PointCoord - 0.5;
+    if (vSize >= 2.5 && dot(pc, pc) > 0.25) discard;
+    float sh = -(pc.x + pc.y);
+    v = sh > 0.18 ? min(1.0, v * 1.28 + 0.04) : sh < -0.18 ? v * 0.6 : v;
+  }
+  o = vec4(vec3(v), vAlpha);
+}`;
+const grainProg = program(GRAIN_VS, GRAIN_FS);
+const grainVao = gl.createVertexArray(), grainBuf = gl.createBuffer();
+gl.bindVertexArray(grainVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, grainBuf);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, 20, 12);
+gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, 20, 16);
+gl.bindVertexArray(null);
+
+function makeTex(filter, wrapS) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapS);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+let texA = makeTex(gl.LINEAR, gl.REPEAT), texB = makeTex(gl.LINEAR, gl.REPEAT);
+function uploadGrid(tex, data) {
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, GN_T, GN_U, 0, gl.RGBA, gl.FLOAT, data);
+}
+const lutTex = makeTex(gl.NEAREST, gl.CLAMP_TO_EDGE);
+{
+  const lut = new Uint8Array(1024);
+  for (let i = 0; i < 1024; i++) lut[i] = Math.round(Math.min(255, tone(i / 2)));
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1024, 1, 0, gl.RED, gl.UNSIGNED_BYTE, lut);
+}
+
+// ---------- grains ----------
+// Grains are sub-pixel to a few device pixels; anything under a pixel is drawn
+// as a single pixel with alpha equal to its area.
+const MAX_GRAINS = 1.2e7;
+let N = 0, sizeScale = 1, maxSize = 1;
+
+function grainSize(rnd) {
+  return sizeScale * dpr * (0.72 + Math.pow(rnd(), 3) * 1.7) / Math.sqrt(13);
+}
+
+function generate(seed, paletteIndex) {
+  const rnd = mulberry32(seed);
+  P = PALETTES[paletteIndex];
+  setupPattern(rnd);
+  sizeGrids();
+
+  const rOut = 1.09;
+  const irisArea = Math.PI * R * R * (rOut * rOut - PUPIL0 * PUPIL0);
+  const pupilArea = Math.PI * sq(R * PUPIL0);
+  const bgArea = Math.max(0, W * H - Math.PI * R * R);
+  const cl = { x: -0.2, y: -0.235, a: 0.1, b: 0.078 };
+  const catchArea = Math.PI * cl.a * cl.b * R * R * 1.6 + Math.PI * sq(0.022 * R) * 1.4;
+  const coverFor = () => { let c = 0; for (let i = 0; i < 4000; i++) c += sq(grainSize(rnd)); return c / 4000; };
+  sizeScale = 1;
+  let avgCover = coverFor();
+  const want = (irisArea * 1.35 + pupilArea * 1.4 + bgArea * 0.3 + catchArea) / avgCover;
+  if (want > MAX_GRAINS) { sizeScale = Math.sqrt(want / MAX_GRAINS); avgCover = coverFor(); }
+  maxSize = sizeScale * dpr * 2.42 / Math.sqrt(13);
+
+  const nIris = Math.floor(irisArea * 1.35 / avgCover);
+  const nPupil = Math.floor(pupilArea * 1.4 / avgCover);
+  const nBg = Math.floor(bgArea * 0.3 / avgCover);
+  const nMain = Math.floor(Math.PI * cl.a * cl.b * R * R * 1.6 / avgCover);
+  const nSmall = Math.floor(Math.PI * sq(0.022 * R) * 1.4 / avgCover);
+  const cap = nIris + nPupil + nBg + nMain + nSmall;
+
+  const ab = new ArrayBuffer(cap * 20);
+  const F = new Float32Array(ab), B = new Uint8Array(ab);
+  let n = 0;
+  const b8 = x => x <= 0 ? 0 : x >= 1 ? 255 : (x * 255 + 0.5) | 0;
+
+  // A grain's unlit value is gridValue * mul + add; non-iris grains have mul = 0.
+  function push(kind, a, th, v, delay, light) {
+    const lum = 0.8 + rnd() * 0.4, jit = (rnd() - 0.5) * 10;
+    let mul = 0, add = v * lum + jit;
+    if (kind === 0) { mul = lum; add = jit; }
+    const m = rnd();
+    if (kind !== 3) {
+      if (m < 0.035) { if (kind !== 2) { mul *= 0.65; add = add * 0.65 + 84; } }
+      else if (m < 0.065) { mul *= 0.45; add *= 0.45; }
+    }
+    const f = n * 5, o = n * 20;
+    F[f] = a; F[f + 1] = th; F[f + 2] = add;
+    B[o + 12] = b8(kind / 3); B[o + 13] = b8(grainSize(rnd) / maxSize); B[o + 14] = (rnd() * 256) | 0; B[o + 15] = b8(rnd());
+    const dr = rnd();
+    B[o + 16] = b8(delay / 2.5); B[o + 17] = b8(mul / 1.3); B[o + 18] = b8(dr * dr * dr); B[o + 19] = b8((light || 0) / 1.5);
+    n++;
+  }
+
+  // background sand: dark, with a faint halo around the limbus
+  const vigEnd = Math.hypot(W, H) * 0.5 / R;
+  for (let i = 0; i < nBg; i++) {
+    const x = rnd() * W, y = rnd() * H;
+    const dx = x - cx, dy = y - cy;
+    const d = Math.sqrt(dx * dx + dy * dy) / R;
+    if (d < 0.99) continue;
+    const vig = 1 - 0.85 * smooth(1.2, vigEnd, d);
+    const halo = smooth(1.5, 1.03, d);
+    push(2, d, Math.atan2(dy, dx), (6 + rnd() * 9) * vig + halo * 6, rnd() * 0.8, halo * 1.5);
+  }
+
+  // iris
+  for (let i = 0; i < nIris; i++) {
+    const rr = Math.sqrt(rnd() * (rOut * rOut - PUPIL0 * PUPIL0) + PUPIL0 * PUPIL0);
+    const u = (rr - PUPIL0) / (1 - PUPIL0);
+    push(0, u, rnd() * TAU, 0, 0.25 + rnd() * 0.7 + (1 - Math.min(u, 1)) * 0.5, 0.36 * (0.35 + 0.65 * u));
+  }
+
+  // pupil: near-black grains with a faint corneal sheen
+  for (let i = 0; i < nPupil; i++) {
+    const a = Math.sqrt(rnd());
+    const edge = smooth(0.9, 1.0, a);
+    push(1, a, rnd() * TAU, 8 + (P.ruff[0] * 0.45 - 8) * edge, 0.9 + rnd() * 0.7, 1.4 * a);
+  }
+
+  // catchlights: soft-edged rounded window plus a small secondary glint
+  for (let i = 0; i < nMain; i++) {
+    const x = (rnd() * 2 - 1) * cl.a * 1.25, y = (rnd() * 2 - 1) * cl.b * 1.25;
+    const d = Math.pow(Math.pow(Math.abs(x / cl.a), 2.6) + Math.pow(Math.abs(y / cl.b), 2.6), 1 / 2.6);
+    if (rnd() > smooth(1.2, 0.55, d) * 0.92) continue;
+    const px = cl.x + x, py = cl.y + y;
+    push(3, Math.hypot(px, py), Math.atan2(py, px), 255 * (0.72 + 0.28 * smooth(1.1, 0.2, d)), 1.6 + rnd() * 0.5);
+  }
+  for (let i = 0; i < nSmall; i++) {
+    const a = Math.sqrt(rnd()) * 0.022, t = rnd() * TAU;
+    const px = 0.16 + Math.cos(t) * a, py = 0.205 + Math.sin(t) * a;
+    if (rnd() > smooth(0.022, 0.012, a)) continue;
+    push(3, Math.hypot(px, py), Math.atan2(py, px), 215, 1.8 + rnd() * 0.5);
+  }
+
+  N = n;
+  gl.bindBuffer(gl.ARRAY_BUFFER, grainBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array(ab, 0, n * 20), gl.STATIC_DRAW);
+  initGrids();
+}
+
+// ---------- rendering ----------
+let seed = 7, paletteIndex = 0, t0 = performance.now(), introLen = 3.4, playIntro = true, lastNow = 0;
+
+function frame(now) {
+  const t = (now - t0) / 1000;
+  const intro = playIntro && t < introLen;
+
+  // advance the pattern clock; it waits at a keyframe if the next grid isn't ready
+  const dtp = Math.min(0.1, Math.max(0, (now - (lastNow || now)) / 1000));
+  tp += dtp;
+  lastNow = now;
+  let alpha = (tp - gTA) / DELTA;
+  if (alpha >= 1) {
+    if (gRow >= GN_U) {
+      const old = gridA; gridA = gridB; gridB = gridN; gridN = old;
+      const ot = texA; texA = texB; texB = ot;
+      uploadGrid(texB, gridB);
+      gTA += DELTA;
+      alpha = clamp01((tp - gTA) / DELTA);
+      beginGrid(gTA + 2 * DELTA);
+    } else { tp = gTA + DELTA; alpha = 1; }
+  }
+  if (alpha >= 1) workGrid(0, 14);
+  else {
+    const timeLeft = (gTA + DELTA - tp) * 0.75;
+    workGrid(Math.ceil((GN_U - gRow) * Math.min(1, dtp / Math.max(timeLeft, 1e-3))), 0);
+  }
+
+  // slow hippus: layered long-period pupil breathing
+  const pR = R * PUPIL0 * (1 + 0.06 * Math.sin(t * 0.42) + 0.025 * Math.sin(t * 0.17 + 1.3) + 0.008 * Math.sin(t * 1.1));
+  // slow torsional sway of the whole eye
+  const rot = 0.035 * Math.sin(t * 0.06) + 0.012 * Math.sin(t * 0.023 + 2);
+  // the light slowly wanders around the upper left
+  const la = LIGHT0 + 0.38 * Math.sin(t * 0.075) + 0.16 * Math.sin(t * 0.031 + 0.7);
+  const lx = Math.cos(la), ly = Math.sin(la);
+  const catchX = (lx - Math.cos(LIGHT0)) * 0.31 * R, catchY = (ly - Math.sin(LIGHT0)) * 0.31 * R;
+
+  gl.viewport(0, 0, W, H);
+  gl.clearColor(2 / 255, 2 / 255, 2 / 255, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  const u = grainProg.u;
+  gl.useProgram(grainProg.pr);
+  gl.uniform2f(u.uRes, W, H); gl.uniform2f(u.uC, cx, cy);
+  gl.uniform2f(u.uLight, lx, ly); gl.uniform2f(u.uCatch, catchX, catchY);
+  gl.uniform1f(u.uR, R); gl.uniform1f(u.uPR, pR); gl.uniform1f(u.uT, t); gl.uniform1f(u.uRot, rot);
+  gl.uniform1f(u.uAlpha, alpha); gl.uniform1f(u.uIntro, intro ? 1 : 0); gl.uniform1f(u.uDpr, dpr);
+  gl.uniform1f(u.uMaxSize, maxSize);
+  gl.uniform3f(u.uGrid, U0, U1, GN_U);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texA); gl.uniform1i(u.uGA, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texB); gl.uniform1i(u.uGB, 1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, lutTex); gl.uniform1i(u.uLut, 2);
+  gl.bindVertexArray(grainVao);
+  gl.drawArrays(gl.POINTS, 0, N);
+
+  gl.bindVertexArray(null);
+  requestAnimationFrame(frame);
+}
+
+// The backing store matches the canvas's device-pixel size (pixel ratio capped at 3).
+const MAX_DPR = 3;
+function resize(keepIntro, pw, ph) {
+  const cssW = canvas.clientWidth || window.innerWidth, cssH = canvas.clientHeight || window.innerHeight;
+  const ratio = window.devicePixelRatio || 1;
+  const scale = Math.min(1, MAX_DPR / ratio);
+  W = Math.max(16, Math.round((pw || cssW * ratio) * scale));
+  H = Math.max(16, Math.round((ph || cssH * ratio) * scale));
+  dpr = W / cssW;
+  canvas.width = W; canvas.height = H;
+  cx = W / 2; cy = H / 2;
+  R = Math.min(W, H) * 0.44;
+  generate(seed, paletteIndex);
+  if (!keepIntro) playIntro = false;
+}
+
+let resizeTimer = 0, started = false, lastPw = 0, lastPh = 0;
+function scheduleResize(pw, ph) {
+  if (pw && pw === lastPw && ph === lastPh) return;
+  lastPw = pw; lastPh = ph;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => resize(false, pw, ph), 150);
+}
+function start(pw, ph) {
+  started = true; lastPw = pw; lastPh = ph;
+  resize(true, pw, ph);
+  requestAnimationFrame(frame);
+}
+if (window.ResizeObserver) {
+  // device-pixel-content-box gives exact physical pixels, and also fires on zoom / DPR changes
+  const ro = new ResizeObserver(entries => {
+    const e = entries[0];
+    const r = window.devicePixelRatio || 1;
+    let pw = e.contentRect.width * r, ph = e.contentRect.height * r;
+    const dp = e.devicePixelContentBoxSize && e.devicePixelContentBoxSize[0];
+    // trust the exact device-pixel box unless it disagrees with the ratio (some emulators)
+    if (dp && Math.abs(dp.inlineSize - pw) <= 2 && Math.abs(dp.blockSize - ph) <= 2) {
+      pw = dp.inlineSize; ph = dp.blockSize;
+    }
+    if (!started) start(pw, ph);
+    else scheduleResize(pw, ph);
+  });
+  try { ro.observe(canvas, { box: 'device-pixel-content-box' }); } catch (_) { ro.observe(canvas); }
+} else {
+  window.addEventListener('resize', () => scheduleResize());
+  start();
+}
+canvas.addEventListener('click', () => {
+  seed = (Math.random() * 1e9) | 0;
+  paletteIndex = (paletteIndex + 1 + Math.floor(Math.random() * (PALETTES.length - 1))) % PALETTES.length;
+  generate(seed, paletteIndex);
+  t0 = performance.now(); playIntro = true;
+});
+})();
+</script>
+</body>
+</html>

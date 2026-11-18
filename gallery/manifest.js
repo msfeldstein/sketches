@@ -39,6 +39,10 @@ window.GALLERY_MANIFEST = {
           label: "Currents",
           prompt: "Make sure the iris canvases are high dpi. Have small electric currents run through them.",
         },
+        {
+          label: "No electricity",
+          prompt: "Remove the electricity.",
+        },
       ],
       entries: [
         {
@@ -47,11 +51,17 @@ window.GALLERY_MANIFEST = {
         },
         {
           id: "astra-6-2-high", model: "Astra 6.2", detail: "High reasoning · Codex",
-          stageNotes: { 4: "Revised after feedback that the motion was invisible" },
+          stageNotes: {
+            4: "Revised after feedback that the motion was invisible",
+            6: "Also told: drop the waviness, particles animate outward freeing the center, individual grains not a mesh",
+          },
         },
         {
           id: "astra-6-2-none", model: "Astra 6.2", detail: "No reasoning · Codex",
-          stageNotes: { 4: "Revised after feedback that the motion was invisible" },
+          stageNotes: {
+            4: "Revised after feedback that the motion was invisible",
+            6: "Also told: drop the waviness, particles animate outward freeing the center, individual grains not a mesh",
+          },
         },
       ],
     },
