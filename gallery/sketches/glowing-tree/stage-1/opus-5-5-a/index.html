@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glow Tree</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #02040c; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  // Seeded PRNG so the tree shape is stable across resizes.
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  let W = 0, H = 0, DPR = 1;
+  let sky, moonCanvas, treeCanvas, treeCtx, bloomA, bloomActx, bloomB, bloomBctx, groundCanvas;
+  let stars = [], tree = null, motes = [], meteors = [];
+  let moon = { x: 0, y: 0, r: 0 };
+  let treeBase = { x: 0, y: 0 }, treeScale = 1;
+  let nextMeteor = 0;
+
+  function makeCanvas(w, h) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w));
+    c.height = Math.max(1, Math.round(h));
+    return c;
+  }
+
+  // ---------- Tree ----------
+  function buildTree() {
+    const rand = mulberry32(20261118);
+    let count = 0;
+    function branch(len, angle, width, depth, abs) {
+      count++;
+      const node = {
+        len, angle, width, depth,
+        phase: rand() * Math.PI * 2,
+        bend: (rand() - 0.5) * 0.35,
+        children: [],
+        leaves: []
+      };
+      if (depth < 10 && len > 4) {
+        const n = depth < 2 ? 2 + (rand() < 0.5 ? 1 : 0) : (rand() < 0.18 ? 3 : 2);
+        const spread = 0.36 + depth * 0.02;
+        for (let i = 0; i < n; i++) {
+          const t = n === 1 ? 0 : i / (n - 1) - 0.5;
+          // Pull branches back toward vertical so the crown spreads up and out instead of drooping.
+          const a = t * spread * 2 + (rand() - 0.5) * 0.3 - abs * 0.22;
+          const shrink = 0.7 + rand() * 0.14;
+          node.children.push(branch(len * shrink, a, width * (0.62 + rand() * 0.1), depth + 1, abs + a));
+        }
+      }
+      if (depth >= 7) {
+        const nl = depth >= 9 ? 2 : 1;
+        for (let i = 0; i < nl; i++) {
+          node.leaves.push({
+            t: 0.3 + rand() * 0.7,
+            off: (rand() - 0.5) * 14,
+            size: 0.8 + rand() * 1.8,
+            tw: rand() * Math.PI * 2,
+            sp: 0.6 + rand() * 2.2
+          });
+        }
+      }
+      return node;
+    }
+    const root = branch(150, 0, 26, 0, 0);
+    root.count = count;
+    return root;
+  }
+
+  function drawTree(t) {
+    const c = treeCtx;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, treeCanvas.width, treeCanvas.height);
+    c.setTransform(DPR, 0, 0, DPR, 0, 0);
+    c.lineCap = 'round';
+
+    const wind = Math.sin(t * 0.35) * 0.6 + Math.sin(t * 0.13 + 1.3) * 0.4;
+    const leafPts = [];
+
+    function rec(node, x, y, ang) {
+      const sway = (Math.sin(t * 1.1 + node.phase) * 0.02 + wind * 0.018) * (node.depth * 0.5 + 0.2);
+      const a = ang + node.angle + sway;
+      const L = node.len * treeScale;
+      const bx = x + Math.sin(a + node.bend) * L * 0.5;
+      const by = y - Math.cos(a + node.bend) * L * 0.5;
+      const ex = x + Math.sin(a) * L;
+      const ey = y - Math.cos(a) * L;
+      const w = Math.max(0.6, node.width * treeScale);
+
+      // Brightness rises toward the tips so the canopy glows hardest.
+      const k = node.depth / 10;
+      const r = Math.round(30 + 50 * k), g = Math.round(120 + 70 * k), b = 255;
+      c.strokeStyle = `rgba(${r},${g},${b},${0.95 - 0.35 * k})`;
+      c.lineWidth = w;
+      c.beginPath();
+      c.moveTo(x, y);
+      c.quadraticCurveTo(bx, by, ex, ey);
+      c.stroke();
+
+      // Bright core line down the middle of thick limbs.
+      if (w > 2.5) {
+        c.strokeStyle = `rgba(200,235,255,${0.75 - 0.3 * k})`;
+        c.lineWidth = w * 0.28;
+        c.beginPath();
+        c.moveTo(x, y);
+        c.quadraticCurveTo(bx, by, ex, ey);
+        c.stroke();
+      }
+
+      for (const lf of node.leaves) {
+        const u = lf.t, iu = 1 - u;
+        const lx = iu * iu * x + 2 * iu * u * bx + u * u * ex + Math.cos(a) * lf.off * treeScale;
+        const ly = iu * iu * y + 2 * iu * u * by + u * u * ey + Math.sin(a) * lf.off * treeScale;
+        const tw = 0.55 + 0.45 * Math.sin(t * lf.sp + lf.tw);
+        leafPts.push(lx, ly, lf.size * treeScale * (0.7 + tw * 0.5), tw);
+      }
+      for (const ch of node.children) rec(ch, ex, ey, a);
+    }
+
+    rec(tree, treeBase.x, treeBase.y, 0);
+
+    // Roots spreading into the ground.
+    c.strokeStyle = 'rgba(60,150,255,0.55)';
+    const rootRand = mulberry32(7);
+    for (let i = 0; i < 9; i++) {
+      const dir = (i / 8 - 0.5) * 2;
+      const len = (60 + rootRand() * 90) * treeScale;
+      c.lineWidth = (6 - Math.abs(dir) * 3) * treeScale;
+      c.beginPath();
+      c.moveTo(treeBase.x + dir * 8 * treeScale, treeBase.y - 4 * treeScale);
+      c.quadraticCurveTo(
+        treeBase.x + dir * len * 0.4, treeBase.y + 6 * treeScale,
+        treeBase.x + dir * len, treeBase.y + (10 + rootRand() * 16) * treeScale
+      );
+      c.stroke();
+    }
+
+    for (let i = 0; i < leafPts.length; i += 4) {
+      const lx = leafPts[i], ly = leafPts[i + 1], s = leafPts[i + 2], tw = leafPts[i + 3];
+      c.fillStyle = `rgba(90,175,255,${0.25 + tw * 0.45})`;
+      c.beginPath();
+      c.arc(lx, ly, s, 0, Math.PI * 2);
+      c.fill();
+      if (tw > 0.93) {
+        c.fillStyle = 'rgba(235,250,255,0.9)';
+        c.beginPath();
+        c.arc(lx, ly, s * 0.45, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+  }
+
+  // ---------- Static layers ----------
+  function buildSky() {
+    sky = makeCanvas(W * DPR, H * DPR);
+    const c = sky.getContext('2d');
+    c.scale(DPR, DPR);
+    const g = c.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#010309');
+    g.addColorStop(0.45, '#05112a');
+    g.addColorStop(0.8, '#0a2150');
+    g.addColorStop(1, '#0d2a5e');
+    c.fillStyle = g;
+    c.fillRect(0, 0, W, H);
+
+    // Faint milky-way band of dust.
+    const rand = mulberry32(99);
+    c.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 260; i++) {
+      const u = rand();
+      const x = u * W;
+      const y = H * (0.05 + 0.5 * (1 - u)) + (rand() - 0.5) * H * 0.18;
+      const r = 20 + rand() * 70;
+      const rg = c.createRadialGradient(x, y, 0, x, y, r);
+      rg.addColorStop(0, `rgba(70,110,200,${0.012 + rand() * 0.018})`);
+      rg.addColorStop(1, 'rgba(70,110,200,0)');
+      c.fillStyle = rg;
+      c.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+
+    // Moon halo baked into the sky.
+    const halo = c.createRadialGradient(moon.x, moon.y, moon.r * 0.9, moon.x, moon.y, moon.r * 6);
+    halo.addColorStop(0, 'rgba(170,205,255,0.35)');
+    halo.addColorStop(0.25, 'rgba(110,160,255,0.12)');
+    halo.addColorStop(1, 'rgba(60,100,220,0)');
+    c.fillStyle = halo;
+    c.fillRect(0, 0, W, H);
+    c.globalCompositeOperation = 'source-over';
+  }
+
+  function buildMoon() {
+    const R = moon.r;
+    const size = Math.ceil(R * 2 + 4);
+    moonCanvas = makeCanvas(size * DPR, size * DPR);
+    const c = moonCanvas.getContext('2d');
+    c.scale(DPR, DPR);
+    const cx = size / 2, cy = size / 2;
+
+    const base = c.createRadialGradient(cx - R * 0.3, cy - R * 0.3, R * 0.1, cx, cy, R);
+    base.addColorStop(0, '#fbfdff');
+    base.addColorStop(0.6, '#dfe9fa');
+    base.addColorStop(1, '#a9bedf');
+    c.beginPath();
+    c.arc(cx, cy, R, 0, Math.PI * 2);
+    c.fillStyle = base;
+    c.fill();
+    c.save();
+    c.clip();
+
+    // Maria: large soft dark patches.
+    const rand = mulberry32(42);
+    const maria = [[-0.25, -0.2, 0.38], [0.2, -0.3, 0.26], [0.1, 0.15, 0.32], [-0.35, 0.3, 0.2], [0.42, 0.05, 0.18]];
+    for (const [mx, my, mr] of maria) {
+      for (let j = 0; j < 6; j++) {
+        const x = cx + (mx + (rand() - 0.5) * 0.15) * R;
+        const y = cy + (my + (rand() - 0.5) * 0.15) * R;
+        const r = mr * R * (0.8 + rand() * 0.7);
+        const g = c.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, 'rgba(120,140,180,0.1)');
+        g.addColorStop(0.6, 'rgba(120,140,180,0.06)');
+        g.addColorStop(1, 'rgba(110,130,170,0)');
+        c.fillStyle = g;
+        c.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+    }
+    // Craters.
+    for (let i = 0; i < 70; i++) {
+      const a = rand() * Math.PI * 2, d = Math.sqrt(rand()) * R * 0.95;
+      const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
+      const r = R * (0.008 + Math.pow(rand(), 3) * 0.07);
+      c.beginPath();
+      c.arc(x, y, r, 0, Math.PI * 2);
+      c.fillStyle = 'rgba(120,140,180,0.16)';
+      c.fill();
+      c.beginPath();
+      c.arc(x + r * 0.25, y + r * 0.25, r * 0.8, 0, Math.PI * 2);
+      c.fillStyle = 'rgba(255,255,255,0.14)';
+      c.fill();
+    }
+    // Limb darkening.
+    const limb = c.createRadialGradient(cx, cy, R * 0.6, cx, cy, R);
+    limb.addColorStop(0, 'rgba(40,70,140,0)');
+    limb.addColorStop(1, 'rgba(40,70,140,0.35)');
+    c.fillStyle = limb;
+    c.fillRect(0, 0, size, size);
+    c.restore();
+  }
+
+  function buildGround() {
+    groundCanvas = makeCanvas(W * DPR, H * DPR);
+    const c = groundCanvas.getContext('2d');
+    c.scale(DPR, DPR);
+    const rand = mulberry32(5);
+
+    // Distant ridge.
+    c.beginPath();
+    c.moveTo(0, H);
+    for (let x = 0; x <= W; x += 8) {
+      const y = H * 0.8 - Math.sin(x * 0.004 + 1) * H * 0.03 - Math.sin(x * 0.011) * H * 0.012;
+      c.lineTo(x, y);
+    }
+    c.lineTo(W, H);
+    c.fillStyle = '#071430';
+    c.fill();
+
+    // Foreground hill the tree stands on.
+    const hillTop = treeBase.y;
+    c.beginPath();
+    c.moveTo(0, H);
+    const pts = [];
+    for (let x = 0; x <= W; x += 6) {
+      const dx = (x - treeBase.x) / (W * 0.5);
+      const y = hillTop + dx * dx * H * 0.07 + Math.sin(x * 0.02) * 2;
+      pts.push([x, y]);
+      c.lineTo(x, y);
+    }
+    c.lineTo(W, H);
+    c.closePath();
+    const hg = c.createLinearGradient(0, hillTop, 0, H);
+    hg.addColorStop(0, '#04102a');
+    hg.addColorStop(1, '#01040c');
+    c.fillStyle = hg;
+    c.fill();
+
+    // Glow pooling at the base of the tree.
+    c.globalCompositeOperation = 'lighter';
+    const pool = c.createRadialGradient(treeBase.x, hillTop, 0, treeBase.x, hillTop, W * 0.35);
+    pool.addColorStop(0, 'rgba(60,150,255,0.35)');
+    pool.addColorStop(0.3, 'rgba(40,110,240,0.12)');
+    pool.addColorStop(1, 'rgba(20,60,200,0)');
+    c.save();
+    c.clip();
+    c.fillStyle = pool;
+    c.fillRect(0, hillTop - 40, W, H);
+    c.restore();
+
+    // Grass blades along the hill crest, lit near the tree.
+    c.lineCap = 'round';
+    for (const [x, y] of pts) {
+      for (let k = 0; k < 3; k++) {
+        const gx = x + rand() * 6;
+        const d = Math.abs(gx - treeBase.x) / (W * 0.4);
+        const lit = Math.max(0, 1 - d);
+        const h = (4 + rand() * 10) * (0.6 + lit * 0.8);
+        c.strokeStyle = `rgba(${60 + lit * 90},${120 + lit * 110},255,${0.08 + lit * 0.55})`;
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(gx, y + 2);
+        c.lineTo(gx + (rand() - 0.5) * 6, y + 2 - h);
+        c.stroke();
+      }
+    }
+    c.globalCompositeOperation = 'source-over';
+  }
+
+  function buildStars() {
+    const rand = mulberry32(1234);
+    const n = Math.round((W * H) / 2600);
+    stars = [];
+    for (let i = 0; i < n; i++) {
+      const y = Math.pow(rand(), 1.4) * H * 0.85;
+      stars.push({
+        x: rand() * W, y,
+        r: rand() < 0.05 ? 1.4 + rand() * 1.2 : 0.6 + rand() * 0.9,
+        a: 0.3 + rand() * 0.7,
+        tw: rand() * Math.PI * 2,
+        sp: 0.5 + rand() * 3,
+        hue: rand() < 0.3 ? 'rgb(190,215,255)' : 'rgb(255,255,255)'
+      });
+    }
+  }
+
+  function spawnMotes() {
+    motes = [];
+    const n = Math.round(60 + W / 20);
+    for (let i = 0; i < n; i++) motes.push(newMote(true));
+  }
+
+  function newMote(initial) {
+    const spread = 260 * treeScale;
+    return {
+      x: treeBase.x + (Math.random() - 0.5) * spread * 2.4,
+      y: initial ? treeBase.y - Math.random() * 420 * treeScale : treeBase.y - Math.random() * 40 * treeScale,
+      vx: (Math.random() - 0.5) * 6,
+      vy: -(6 + Math.random() * 18),
+      r: 0.6 + Math.random() * 1.8,
+      life: 0, max: 6 + Math.random() * 10,
+      ph: Math.random() * Math.PI * 2
+    };
+  }
+
+  // ---------- Shooting stars ----------
+  function spawnMeteor() {
+    const fromLeft = Math.random() < 0.5;
+    const ang = (fromLeft ? 0.25 : Math.PI - 0.25) + (Math.random() - 0.5) * 0.35;
+    const speed = Math.max(W, H) * (0.7 + Math.random() * 0.6);
+    meteors.push({
+      x: Math.random() * W, y: Math.random() * H * 0.35,
+      vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed,
+      life: 0, max: 0.9 + Math.random() * 0.9,
+      len: 160 + Math.random() * 260,
+      w: 1.4 + Math.random() * 1.8
+    });
+  }
+
+  function drawMeteors(dt) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = meteors.length - 1; i >= 0; i--) {
+      const m = meteors[i];
+      m.life += dt;
+      m.x += m.vx * dt; m.y += m.vy * dt;
+      const p = m.life / m.max;
+      if (p >= 1) { meteors.splice(i, 1); continue; }
+      const fade = Math.sin(p * Math.PI);
+      const sp = Math.hypot(m.vx, m.vy);
+      const tx = m.x - (m.vx / sp) * m.len, ty = m.y - (m.vy / sp) * m.len;
+      const g = ctx.createLinearGradient(m.x, m.y, tx, ty);
+      g.addColorStop(0, `rgba(255,255,255,${fade})`);
+      g.addColorStop(0.15, `rgba(170,215,255,${0.7 * fade})`);
+      g.addColorStop(1, 'rgba(80,140,255,0)');
+      ctx.strokeStyle = g;
+      ctx.lineWidth = m.w;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(m.x, m.y);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+      const hg = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, 10 * m.w);
+      hg.addColorStop(0, `rgba(220,240,255,${0.8 * fade})`);
+      hg.addColorStop(1, 'rgba(120,180,255,0)');
+      ctx.fillStyle = hg;
+      ctx.fillRect(m.x - 12 * m.w, m.y - 12 * m.w, 24 * m.w, 24 * m.w);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- Layout ----------
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+
+    const m = Math.min(W, H);
+    moon.r = m * 0.17;
+    moon.x = W * (W > H ? 0.7 : 0.62);
+    moon.y = H * 0.27;
+
+    treeBase.x = W * (W > H ? 0.4 : 0.48);
+    treeBase.y = H * 0.86;
+    treeScale = Math.min(H / 900, W / 700);
+
+    treeCanvas = makeCanvas(W * DPR, H * DPR);
+    treeCtx = treeCanvas.getContext('2d');
+    bloomA = makeCanvas(W / 4, H / 4); bloomActx = bloomA.getContext('2d');
+    bloomB = makeCanvas(W / 12, H / 12); bloomBctx = bloomB.getContext('2d');
+
+    buildSky();
+    buildMoon();
+    buildGround();
+    buildStars();
+    spawnMotes();
+  }
+
+  // ---------- Frame ----------
+  let last = performance.now();
+  const start = last;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const t = (now - start) / 1000;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(sky, 0, 0);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+    // Stars.
+    for (const s of stars) {
+      const a = s.a * (0.55 + 0.45 * Math.sin(t * s.sp + s.tw));
+      const dm = Math.hypot(s.x - moon.x, s.y - moon.y) / (moon.r * 3);
+      ctx.globalAlpha = a * Math.min(1, dm * dm);
+      ctx.fillStyle = s.hue;
+      ctx.fillRect(s.x - s.r / 2, s.y - s.r / 2, s.r, s.r);
+      if (s.r > 1.2) {
+        ctx.globalAlpha *= 0.35;
+        ctx.fillRect(s.x - s.r * 2, s.y - 0.3, s.r * 4, 0.6);
+        ctx.fillRect(s.x - 0.3, s.y - s.r * 2, 0.6, s.r * 4);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    nextMeteor -= dt;
+    if (nextMeteor <= 0) {
+      spawnMeteor();
+      if (Math.random() < 0.25) spawnMeteor();
+      nextMeteor = 1.2 + Math.random() * 3.5;
+    }
+    drawMeteors(dt);
+
+    // Moon with a gently breathing glow.
+    const pulse = 1 + Math.sin(t * 0.5) * 0.03;
+    ctx.globalCompositeOperation = 'lighter';
+    const mg = ctx.createRadialGradient(moon.x, moon.y, moon.r * 0.95, moon.x, moon.y, moon.r * 1.9 * pulse);
+    mg.addColorStop(0, 'rgba(200,225,255,0.45)');
+    mg.addColorStop(1, 'rgba(120,170,255,0)');
+    ctx.fillStyle = mg;
+    ctx.fillRect(moon.x - moon.r * 2.5, moon.y - moon.r * 2.5, moon.r * 5, moon.r * 5);
+    ctx.globalCompositeOperation = 'source-over';
+    const ms = moonCanvas.width / DPR;
+    ctx.drawImage(moonCanvas, moon.x - ms / 2, moon.y - ms / 2, ms, ms);
+
+    // Drifting mist bands.
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 3; i++) {
+      const y = H * (0.74 + i * 0.05);
+      const x = ((t * (8 + i * 5)) % (W * 1.5)) - W * 0.25;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, W * 0.5);
+      g.addColorStop(0, 'rgba(60,110,220,0.07)');
+      g.addColorStop(1, 'rgba(60,110,220,0)');
+      ctx.save();
+      ctx.translate(0, y);
+      ctx.scale(1, 0.18);
+      ctx.translate(0, -y);
+      ctx.fillStyle = g;
+      ctx.fillRect(x - W * 0.5, y - W * 0.5, W, W);
+      ctx.restore();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(groundCanvas, 0, 0);
+
+    // Tree + bloom (downsample chain then additive upscale).
+    drawTree(t);
+    bloomActx.clearRect(0, 0, bloomA.width, bloomA.height);
+    bloomActx.drawImage(treeCanvas, 0, 0, bloomA.width, bloomA.height);
+    bloomBctx.clearRect(0, 0, bloomB.width, bloomB.height);
+    bloomBctx.drawImage(bloomA, 0, 0, bloomB.width, bloomB.height);
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.75;
+    ctx.drawImage(bloomB, 0, 0, canvas.width, canvas.height);
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(bloomA, 0, 0, canvas.width, canvas.height);
+    ctx.globalAlpha = 1;
+    ctx.drawImage(treeCanvas, 0, 0);
+
+    // Floating light motes rising from the tree.
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    for (let i = 0; i < motes.length; i++) {
+      const p = motes[i];
+      p.life += dt;
+      p.x += (p.vx + Math.sin(t * 0.8 + p.ph) * 8) * dt;
+      p.y += p.vy * dt;
+      if (p.life > p.max) { motes[i] = newMote(false); continue; }
+      const f = Math.sin((p.life / p.max) * Math.PI);
+      const r = p.r * 5;
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      g.addColorStop(0, `rgba(210,240,255,${0.9 * f})`);
+      g.addColorStop(0.25, `rgba(110,190,255,${0.4 * f})`);
+      g.addColorStop(1, 'rgba(60,130,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Vignette.
+    const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.8);
+    v.addColorStop(0, 'rgba(0,0,0,0)');
+    v.addColorStop(1, 'rgba(0,2,10,0.6)');
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, W, H);
+
+    requestAnimationFrame(frame);
+  }
+
+  tree = buildTree();
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resize, 60);
+  });
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

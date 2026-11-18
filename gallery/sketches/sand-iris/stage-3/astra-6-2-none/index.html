@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Iris · Sand study</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050505}canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas aria-label="A circular iris formed from thousands of graphite, silver, and chalk-white sand grains surrounding a deep black pupil." role="img"></canvas>
+<script>
+'use strict';
+const display=document.querySelector('canvas');
+const canvas=document.createElement('canvas'), ctx=canvas.getContext('2d');
+const tau=Math.PI*2, clamp=x=>Math.max(0,Math.min(1,x));
+function generator(seed){
+  return ()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
+}
+const palettes=[
+ [4,35,142,244],
+ [6,49,166,252],
+ [8,63,192,255],
+ [9,72,208,255],
+ [4,29,117,231],
+ [2,16,64,166]
+].map(ramp=>ramp.map(gray=>[gray,gray,gray]));
+// An atlas of chipped mineral grains, each with a lit facet on the upper left.
+const tile=12, atlas=document.createElement('canvas');
+atlas.width=32*tile;atlas.height=palettes.length*tile;
+const ac=atlas.getContext('2d');
+for(let p=0;p<palettes.length;p++)for(let j=0;j<32;j++){
+ const v=j/31*2.999,i=Math.floor(v),t=v-i;
+ const rgb=palettes[p][i].map((c,k)=>Math.round(c*(1-t)+palettes[p][i+1][k]*t));
+ ac.save();ac.translate(j*tile,p*tile);
+ ac.fillStyle='rgb('+rgb.join(',')+')';
+ ac.beginPath();ac.moveTo(1,5);ac.lineTo(4,1);ac.lineTo(9,2);ac.lineTo(11,6);ac.lineTo(8,10);ac.lineTo(3,9);ac.closePath();ac.fill();
+ ac.fillStyle='rgba(255,255,255,.22)';ac.beginPath();ac.moveTo(1,5);ac.lineTo(4,1);ac.lineTo(9,2);ac.lineTo(5,4);ac.closePath();ac.fill();ac.restore();
+}
+function render(){
+ const w=innerWidth,h=innerHeight,d=Math.min(devicePixelRatio||1,2);
+ canvas.width=Math.round(w*d);canvas.height=Math.round(h*d);
+ ctx.setTransform(d,0,0,d,w*d/2,h*d/2);
+ const R=.462*Math.min(w,h),rand=generator(86142),sin=Math.sin,cos=Math.cos;
+ function grain(x,y,s,p,v){
+  const j=Math.round(31*clamp(v));
+  ctx.drawImage(atlas,j*tile,p*tile,tile,tile,x-s/2,y-s*.44,s,s*.89);
+ }
+ // Sparse loose particles at the circumference and on the dark ground.
+ for(let i=0;i<w*h/70;i++){
+  const x=(rand()-.5)*w,y=(rand()-.5)*h;
+  grain(x,y,.45+rand()*1.05,5,rand()*.35);
+ }
+ const bins=4096,fields=[];
+ for(let k=0;k<5;k++){
+  const n=[19,47,109,241,61][k],knots=Array.from({length:n},rand),arr=new Float32Array(bins);
+  for(let j=0;j<bins;j++){
+   const u=j*n/bins,i=Math.floor(u),f=u-i,t=f*f*(3-2*f);
+   arr[j]=knots[i]*(1-t)+knots[(i+1)%n]*t;
+  }
+  fields.push(arr);
+ }
+ function field(k,a){return fields[k][Math.floor(a*(bins/tau))&(bins-1)]}
+ function collar(a){return .464+.031*sin(7*a+.6)+.016*sin(14*a)+.074*(field(1,a)-.5)}
+ const count=Math.min(560000,Math.max(90000,Math.round(R*R*2.6)));
+ const unit=R/Math.sqrt(count/2.6);
+ for(let i=0;i<count;i++){
+  const a=rand()*tau,r=Math.sqrt(.054+rand()*.969);
+  const edge=1+.002*sin(9*a)+.002*sin(17*a)+.0018*(field(2,a)-.5);
+  const pupil=.253+.0025*sin(5*a)+.0018*sin(9*a);
+  if(r<pupil-.003 || r>edge+.005)continue;
+  const c=collar(a),outer=r-c;
+  const bend=a+.039*sin(6*a+3*r)+.026*sin(18*a-4*r)+.021*sin(9*r+11*a);
+  const wide=field(0,bend),strand=field(2,bend),fine=field(3,bend+.004*sin(22*r+8*a));
+  const crypt=Math.exp(-Math.pow((outer-.045)/(.046+.051*wide),2))*clamp((field(1,bend)-.39)*2.5);
+  const ridge=Math.exp(-Math.abs(outer)/.017);
+  const limb=clamp((r-.887)/.108);
+  let light=.26+.25*wide+.33*(strand-.35)+.21*(fine-.4)+.09*sin(11*r-2*a);
+  // Raking light breaks across the raised bundles and the folded collar.
+  const rake=.5+.5*cos(a+2.25);
+  const crest=clamp((strand+.36*fine-.70)*2.9);
+  light=(light-.39)*1.32+.36;
+  light+=ridge*(.26+.22*rake)-crypt*.57-limb*limb*.52;
+  light+=crest*(.08+.19*rake)+.14*(rake-.5);
+  // Broken peripheral contraction furrows run across the radial tissue.
+  const fold=.5+.5*cos(129*r+3*sin(4*a)+1.5*sin(9*a));
+  light-=.14*fold**7*clamp((r-.67)*8)*field(0,a+1);
+  const inner=clamp((c-r+.019)/.135);
+  light-=.16*inner+.25*Math.exp(-Math.abs(r-pupil)/.016);
+  let warmth=inner*.82+ridge*.63+.58*field(0,bend+.04)+.21*strand+.17*sin(a*3+.6);
+  const jitter=rand(); warmth+=(jitter-.5)*.44;
+  let p=warmth>1.00?3:warmth>.77?2:field(1,bend+.13)+.24*sin(3*a)>.65?4:wide>.51?1:0;
+  if(r>edge-.017||r<pupil+.007)p=5;
+  if(r>edge-.008)light-=.16;
+  light+=(rand()-.48)*.49;
+  if(rand()<.021)light+=.34;
+  const size=(.70+1.84*rand()**2)*unit*(1+.23*ridge);
+  grain(R*r*cos(a),R*r*sin(a),size,p,light);
+ }
+}
+// Sample the fixed grain bed through a smooth radial displacement, so each
+// grain keeps its identity throughout the pupil's breathing cycle.
+const gl=display.getContext('webgl',{alpha:false,antialias:false,depth:false});
+let draw;
+if(gl){
+ const program=gl.createProgram();
+ function attach(type,source){
+  const shader=gl.createShader(type);
+  gl.shaderSource(shader,source);gl.compileShader(shader);
+  gl.attachShader(program,shader);
+ }
+ attach(gl.VERTEX_SHADER,`attribute vec2 point;
+ void main(){gl_Position=vec4(point,0.,1.);}`);
+ attach(gl.FRAGMENT_SHADER,`precision highp float;
+ uniform sampler2D grains;
+ uniform vec2 size;
+ uniform float time;
+ void main(){
+   vec2 pixel=vec2(gl_FragCoord.x,size.y-gl_FragCoord.y);
+   float radius=.462*min(size.x,size.y);
+   vec2 pos=(pixel-.5*size)/radius;
+   float r=length(pos);
+   vec2 dir=pos/max(r,.0001);
+   float tissue=1.-smoothstep(.25,.99,r);
+   float breath=.013*sin(time*.37)+.003*sin(time*.19);
+   vec2 source=pos-dir*breath*tissue*smoothstep(.02,.22,r);
+   float twist=.0018*tissue*sin(time*.22+6.*r);
+   source+=vec2(-pos.y,pos.x)*twist;
+   vec4 sand=texture2D(grains,(source*radius+.5*size)/size);
+   float sweep=sin(time*.21+dir.x*2.8-dir.y*1.9+3.*r);
+   float gain=1.+.11*sweep*smoothstep(.23,.36,r)*(1.-smoothstep(.89,1.,r));
+   gl_FragColor=vec4(vec3(.019608)*(1.-sand.a)+sand.rgb*gain,1.);
+ }`);
+ gl.linkProgram(program);gl.useProgram(program);
+ const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+ gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+ const point=gl.getAttribLocation(program,'point');
+ gl.enableVertexAttribArray(point);gl.vertexAttribPointer(point,2,gl.FLOAT,false,0,0);
+ gl.bindTexture(gl.TEXTURE_2D,gl.createTexture());
+ gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+ gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+ for(const axis of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])
+  gl.texParameteri(gl.TEXTURE_2D,axis,gl.CLAMP_TO_EDGE);
+ gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
+ const size=gl.getUniformLocation(program,'size'),time=gl.getUniformLocation(program,'time');
+ draw=(seconds,rebuild)=>{
+  if(rebuild){
+   gl.viewport(0,0,display.width,display.height);
+   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+   gl.uniform2f(size,display.width,display.height);
+  }
+  gl.uniform1f(time,seconds);gl.drawArrays(gl.TRIANGLES,0,3);
+ };
+}else{
+ const surface=display.getContext('2d');
+ draw=seconds=>{
+  const scale=1+.004*Math.sin(seconds*.37);
+  surface.setTransform(scale,0,0,scale,display.width*(1-scale)/2,display.height*(1-scale)/2);
+  surface.clearRect(-display.width,-display.height,3*display.width,3*display.height);
+  surface.globalAlpha=.96+.04*Math.sin(seconds*.21);
+  surface.drawImage(canvas,0,0);
+ };
+}
+let dirty=true;
+window.addEventListener('resize',()=>{dirty=true});
+function animate(timestamp){
+ if(dirty){
+  render();
+  display.width=canvas.width;display.height=canvas.height;
+ }
+ draw(timestamp*.001,dirty);dirty=false;
+ requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
