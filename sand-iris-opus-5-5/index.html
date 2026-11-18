@@ -385,15 +385,18 @@ function buildKernels() {
     [[0, 0, 1], [1, 0, 0], [0, 1, 0], [1, 1, 2]],
     [[1, 0, 1], [0, 1, 1], [1, 1, 0], [2, 1, 2], [1, 2, 2]],
     [[1, 0, 1], [2, 0, 1], [0, 1, 1], [1, 1, 1], [2, 1, 0], [3, 1, 0],
-     [0, 2, 0], [1, 2, 0], [2, 2, 0], [3, 2, 2], [1, 3, 2], [2, 3, 2]]
+     [0, 2, 0], [1, 2, 0], [2, 2, 0], [3, 2, 2], [1, 3, 2], [2, 3, 2]],
+    [[1, 0, 1], [2, 0, 1], [3, 0, 1], [0, 1, 1], [1, 1, 1], [2, 1, 1], [3, 1, 0], [4, 1, 0],
+     [0, 2, 1], [1, 2, 0], [2, 2, 0], [3, 2, 0], [4, 2, 2], [0, 3, 0], [1, 3, 0], [2, 3, 0],
+     [3, 3, 2], [4, 3, 2], [1, 4, 2], [2, 4, 2], [3, 4, 2]]
   ];
   kernels = defs.map(d => d && { off: Int32Array.from(d.map(k => k[1] * W + k[0])), sh: Uint8Array.from(d.map(k => k[2])) });
 }
-const COVER = [0, 1, 4, 5, 12];
+const COVER = [0, 1, 4, 5, 12, 21];
 
 function grainSize(rnd) {
   const s = Math.round(dpr * (0.72 + Math.pow(rnd(), 3) * 1.7));
-  return s < 1 ? 1 : s > 4 ? 4 : s;
+  return s < 1 ? 1 : s > 5 ? 5 : s;
 }
 
 function generate(seed, paletteIndex) {
@@ -502,6 +505,110 @@ function generate(seed, paletteIndex) {
 
   N = n;
   initGrids();
+  currents.length = 0;
+}
+
+// ---------- electric currents ----------
+// Short-lived sparks that crawl through the dark gaps between fibre strands of the
+// live pattern grid, drawn additively as bright grains with a scatter of glow grains.
+const currents = [];
+let nextSpawn = 0;
+
+function gridValueAt(u, th) {
+  let iu = Math.round((u - U0) / (U1 - U0) * (GN_U - 1));
+  iu = iu < 0 ? 0 : iu >= GN_U ? GN_U - 1 : iu;
+  let it = Math.round(th / TAU * GN_T) % GN_T; if (it < 0) it += GN_T;
+  const o = (iu * GS + it) * 4;
+  return gridC[o] * gridC[o + 1];
+}
+
+function walkCurrent(u, th, dir, steps, depth, start, out) {
+  const pts = [u, th];
+  out.push({ pts, start });
+  for (let i = 0; i < steps; i++) {
+    const nu = u + dir * (0.005 + Math.random() * 0.006);
+    if (nu < 0.03 || nu > 0.97) break;
+    const unit = 0.0042 / (0.3 + 0.7 * nu);
+    let best = th, bestScore = -1e9;
+    for (let k = -2; k <= 2; k++) {
+      const c = th + k * unit;
+      const score = -gridValueAt(nu, c) + Math.random() * 45 - Math.abs(k) * 5;
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    u = nu; th = best;
+    pts.push(u, th);
+    if (depth === 0 && Math.random() < 0.06) {
+      walkCurrent(u, th, Math.random() < 0.8 ? dir : -dir, 5 + (Math.random() * 14) | 0, 1, start + i + 1, out);
+    }
+  }
+}
+
+function spawnCurrent(t) {
+  const paths = [];
+  const u = 0.06 + Math.random() * 0.86;
+  walkCurrent(u, Math.random() * TAU, Math.random() < 0.5 ? 1 : -1, 24 + (Math.random() * 60) | 0, 0, 0, paths);
+  let len = 0;
+  for (const p of paths) len = Math.max(len, p.start + p.pts.length / 2);
+  currents.push({ paths, born: t, speed: 50 + Math.random() * 70, len, glow: 0.7 + Math.random() * 0.5 });
+}
+
+function addGray(x, y, a) {
+  if (x < 0 || y < 0 || x >= W || y >= H) return;
+  const p = y * W + x;
+  let v = (buf[p] & 255) + a;
+  if (v > 255) v = 255;
+  buf[p] = 0xff000000 | (v << 16) | (v << 8) | v;
+}
+
+function drawCurrents(t, pR, span, rot, allowSpawn) {
+  if (allowSpawn && t >= nextSpawn) {
+    if (currents.length < 10) spawnCurrent(t);
+    nextSpawn = t + 0.1 + Math.random() * 0.45;
+  }
+  const core = Math.max(1, Math.round(dpr * 1.1));
+  const step = 0.7 * dpr;
+  const jit = 0.7 * dpr;
+  for (let ci = currents.length - 1; ci >= 0; ci--) {
+    const cur = currents[ci];
+    const age = t - cur.born;
+    const head = age * cur.speed;
+    const after = age - cur.len / cur.speed;
+    const fade = after > 0 ? 1 - after / 0.9 : 1;
+    if (fade <= 0) { currents.splice(ci, 1); continue; }
+    const flick = (0.55 + 0.45 * Math.random()) * cur.glow;
+    for (const path of cur.paths) {
+      const pts = path.pts, n = pts.length / 2;
+      const local = head - path.start;
+      if (local <= 0) continue;
+      let px = 0, py = 0;
+      for (let k = 0; k < n; k++) {
+        const r = pR + pts[2 * k] * span, a = pts[2 * k + 1] + rot;
+        const x = cx + r * Math.cos(a) + (Math.random() - 0.5) * jit;
+        const y = cy + r * Math.sin(a) + (Math.random() - 0.5) * jit;
+        if (k > 0 && k <= local) {
+          const d = local - k;
+          const I = Math.max(Math.exp(-d / 14), 0.35) * fade * flick;
+          const dx = x - px, dy = y - py;
+          const m = Math.max(1, Math.ceil(Math.hypot(dx, dy) / step));
+          for (let q = 0; q < m; q++) {
+            const sx = px + dx * q / m, sy = py + dy * q / m;
+            const ix = sx | 0, iy = sy | 0;
+            const ca = 255 * I;
+            const cw = I > 0.6 ? core + 1 : core;
+            for (let oy = 0; oy < cw; oy++) for (let ox = 0; ox < cw; ox++) addGray(ix + ox, iy + oy, ca);
+            if (Math.random() < 0.55) {
+              const g = (Math.random() + Math.random() + Math.random() - 1.5) * 3.2 * dpr;
+              const h = (Math.random() + Math.random() + Math.random() - 1.5) * 3.2 * dpr;
+              const gs = Math.max(1, Math.round(dpr * (0.6 + Math.random())));
+              const ga = 140 * I * (0.4 + Math.random() * 0.6);
+              for (let oy = 0; oy < gs; oy++) for (let ox = 0; ox < gs; ox++) addGray(((sx + g) | 0) + ox, ((sy + h) | 0) + oy, ga);
+            }
+          }
+        }
+        px = x; py = y;
+      }
+    }
+  }
 }
 
 // ---------- rendering ----------
@@ -549,7 +656,7 @@ function frame(now) {
   const tt = (t * 10) | 0;
   const dt = (t * 40) | 0;
   const driftAmp = 0.018;
-  const Wm = W - 5, Hm = H - 5;
+  const Wm = W - 6, Hm = H - 6;
   const ko = kernels;
 
   for (let i = 0; i < N; i++) {
@@ -604,14 +711,20 @@ function frame(now) {
     const off = kern.off, sh = kern.sh;
     for (let j = 0; j < off.length; j++) { const q = sh[j]; buf[p + off[j]] = q === 0 ? cb : q === 1 ? cl : cs; }
   }
+  drawCurrents(t, pR, span, rot, !intro);
   ctx.putImageData(img, 0, 0);
   requestAnimationFrame(frame);
 }
 
-function resize(keepIntro) {
-  dpr = Math.min(window.devicePixelRatio || 1, 2);
-  W = Math.max(16, Math.floor(window.innerWidth * dpr));
-  H = Math.max(16, Math.floor(window.innerHeight * dpr));
+// The backing store matches the canvas's device-pixel size (pixel ratio capped at 3).
+const MAX_DPR = 3;
+function resize(keepIntro, pw, ph) {
+  const cssW = canvas.clientWidth || window.innerWidth, cssH = canvas.clientHeight || window.innerHeight;
+  const ratio = window.devicePixelRatio || 1;
+  const scale = Math.min(1, MAX_DPR / ratio);
+  W = Math.max(16, Math.round((pw || cssW * ratio) * scale));
+  H = Math.max(16, Math.round((ph || cssH * ratio) * scale));
+  dpr = W / cssW;
   canvas.width = W; canvas.height = H;
   cx = W / 2; cy = H / 2;
   R = Math.min(W, H) * 0.44;
@@ -622,11 +735,37 @@ function resize(keepIntro) {
   if (!keepIntro) playIntro = false;
 }
 
-let resizeTimer = 0;
-window.addEventListener('resize', () => {
+let resizeTimer = 0, started = false, lastPw = 0, lastPh = 0;
+function scheduleResize(pw, ph) {
+  if (pw && pw === lastPw && ph === lastPh) return;
+  lastPw = pw; lastPh = ph;
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => resize(false), 150);
-});
+  resizeTimer = setTimeout(() => resize(false, pw, ph), 150);
+}
+function start(pw, ph) {
+  started = true; lastPw = pw; lastPh = ph;
+  resize(true, pw, ph);
+  requestAnimationFrame(frame);
+}
+if (window.ResizeObserver) {
+  // device-pixel-content-box gives exact physical pixels, and also fires on zoom / DPR changes
+  const ro = new ResizeObserver(entries => {
+    const e = entries[0];
+    const r = window.devicePixelRatio || 1;
+    let pw = e.contentRect.width * r, ph = e.contentRect.height * r;
+    const dp = e.devicePixelContentBoxSize && e.devicePixelContentBoxSize[0];
+    // trust the exact device-pixel box unless it disagrees with the ratio (some emulators)
+    if (dp && Math.abs(dp.inlineSize - pw) <= 2 && Math.abs(dp.blockSize - ph) <= 2) {
+      pw = dp.inlineSize; ph = dp.blockSize;
+    }
+    if (!started) start(pw, ph);
+    else scheduleResize(pw, ph);
+  });
+  try { ro.observe(canvas, { box: 'device-pixel-content-box' }); } catch (_) { ro.observe(canvas); }
+} else {
+  window.addEventListener('resize', () => scheduleResize());
+  start();
+}
 canvas.addEventListener('click', () => {
   seed = (Math.random() * 1e9) | 0;
   paletteIndex = (paletteIndex + 1 + Math.floor(Math.random() * (PALETTES.length - 1))) % PALETTES.length;
@@ -634,8 +773,6 @@ canvas.addEventListener('click', () => {
   t0 = performance.now(); playIntro = true;
 });
 
-resize(true);
-requestAnimationFrame(frame);
 })();
 </script>
 </body>
