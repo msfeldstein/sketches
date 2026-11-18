@@ -10,7 +10,7 @@ window.GALLERY_MANIFEST = {
   subtitle:
     "Live generative canvas sketches from different AI models, given the same prompts.",
   notes: [
-    "Gemini 4 Carbon was also part of this test but failed every run, so it has no entries.",
+    "Gemini 4 Carbon on high reasoning failed or hung on every run, so its entries use medium reasoning.",
   ],
   prompts: [
     {
