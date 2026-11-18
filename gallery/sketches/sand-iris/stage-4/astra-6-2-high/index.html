@@ -79,11 +79,12 @@ function createModel(count) {
   // The original seeded samples define the cross-section at time zero.
   const cryptSeeds = Array.from({ length: 108 }, () => Array.from({ length: 6 }, geology));
   function prepare(seconds) {
-    curves.forEach(update => update(seconds));
+    const fieldTime = seconds * 4.8;
+    curves.forEach(update => update(fieldTime));
     const openings = Array.from({ length: 256 }, () => []);
     cryptSeeds.forEach((seed, i) => {
       function field(k) {
-        const t = seconds / (39 + 4*k + i%9), e = Math.floor(t);
+        const t = fieldTime / (39 + 4*k + i%9), e = Math.floor(t);
         const row = n => n === 0 ? seed[k] : hash(i, 31+k, n);
         return clamp(cubic(row(e-1), row(e), row(e+1), row(e+2), t-e));
       }
@@ -94,9 +95,9 @@ function createModel(count) {
       for (let b = -12; b <= 12; b++)
         openings[(Math.floor(a * 256) + b + 256) % 256].push(hole);
     });
-    const breath = .020 * Math.sin(seconds * tau / 17) + .003 * Math.sin(seconds * tau / 29);
-    const lx = .105 * Math.sin(seconds * tau / 33), ly = .062 * Math.sin(seconds * tau / 41);
-    const wave = .36 * Math.sin(seconds / 21), ripple = .28 * Math.sin(seconds / 27);
+    const breath = .035 * Math.sin(seconds * tau / 12) + .006 * Math.sin(seconds * tau / 21);
+    const lx = .15 * Math.sin(seconds * tau / 19), ly = .10 * Math.sin(seconds * tau / 23);
+    const wave = .54 * Math.sin(fieldTime / 21), ripple = .38 * Math.sin(fieldTime / 27);
     function shade(r, a, x, y) {
       const edge = 1 + .0018 * folds(a) + .001 * continent(a);
 
@@ -166,7 +167,7 @@ function createModel(count) {
     // The rest position fixes its neighborhood. Drift and facet properties use
     // separate noise channels, so changes in one grain never reseed its neighbors.
     const clocks = [23, 31, 36, 47, 29, 38, 52].map((period, k) => {
-      const t = seconds / period + .137 * k, e = Math.floor(t), f = t-e;
+      const t = fieldTime / period + .137 * k, e = Math.floor(t), f = t-e;
       return { e, mix: f*f*(3-2*f) };
     });
     function grainNoise(id, k) {
@@ -179,7 +180,7 @@ function createModel(count) {
         const loose = id >= bodyCount;
         const radialSeed = hash(id, 88, 0), angularSeed = hash(id, 89, 0);
         let r = Math.sqrt(.082 + radialSeed * .925);
-        let a = angularSeed + .0018 * (grainNoise(id,0) - .5) +
+        let a = angularSeed + .0030 * (grainNoise(id,0) - .5) +
           .0011 * bends(angularSeed + r * .04);
         a -= Math.floor(a);
         const angle = a * tau, cos = Math.cos(angle), sin = Math.sin(angle);
@@ -199,7 +200,7 @@ function createModel(count) {
           value = (inside ? 77 : 115 + (lx*80-29)*cos + (ly*80-22)*sin) * light;
           scale = 10 * (.86 * hash(id,90,0) + .14 * grainNoise(id,2)) ** 2;
         } else {
-          r += .006 * (grainNoise(id,1) - .5) + .002 * folds(a+r*.03);
+          r += .009 * (grainNoise(id,1) - .5) + .002 * folds(a+r*.03);
           value = shade(r, a, r*cos, r*sin);
           const crystal = mineral + .045 * (grainNoise(id,5)-.5);
           value *= (.70 + .46 * hash(id,92,0) + .12 * pigment) *
@@ -207,10 +208,17 @@ function createModel(count) {
           value += smooth(.958,.985,crystal) * (22 + 52*pigment) *
             smooth(pupil(a), pupil(a)+.006, r) * (1-smooth(.995,1.001,r));
         }
-        const radius = r + breath * (1 - smooth(.29, .98, r));
+        // Neighboring grains carry each ridge and crypt together as the fibers flex.
+        // The waves arrive at different times around the iris and taper at the rim.
+        const flex = smooth(.265, .46, r) * (1 - smooth(.78, 1.015, r));
+        const surge = Math.sin(3*angle + 5*r - .48*seconds);
+        const bend = .078*surge + .034*Math.sin(5*angle - 7*r + .37*seconds);
+        const direction = angle + flex*bend;
+        const radius = r + breath * (1 - smooth(.29, .98, r)) +
+          .020 * flex * Math.sin(4*angle - 6*r + .43*seconds);
         const pos = id * 5;
-        out[pos] = radius * cos;
-        out[pos+1] = radius * sin;
+        out[pos] = radius * Math.cos(direction);
+        out[pos+1] = radius * Math.sin(direction);
         out[pos+2] = Math.max(0,value) / 255;
         out[pos+3] = (.38 + .17 * scale) * Math.sqrt(495900/count);
         out[pos+4] = tau * hash(id,93,0) + .75 * (grainNoise(id,3)-.5) + .18 * grainNoise(id,6);
@@ -227,7 +235,6 @@ const gl = canvas.getContext('webgl', {
 const count = gl ? 395000 : 162000;
 const interval = 1.6;
 const slices = [];
-const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let side, renderer, nextTime = 0, requested = false, worker, localModel;
 let time = 0, previous = null, lastDraw = -Infinity, frame, dirty = true;
 
@@ -378,7 +385,7 @@ function accept(data) {
 // Compute temporal samples ahead of playback. Display frames interpolate each
 // grain's position, value, radius and orientation before rasterization.
 function requestSlice() {
-  if (requested || slices.length >= (reducedMotion.matches ? 1 : 3) || document.hidden) return;
+  if (requested || slices.length >= 3 || document.hidden) return;
   requested = true;
   if (worker) {
     worker.postMessage(nextTime);
@@ -405,12 +412,12 @@ function wake() {
 }
 function animate(now) {
   frame = null;
-  const moving = !reducedMotion.matches && slices.length > 1;
+  const moving = slices.length > 1;
   if (moving && previous !== null) {
-    time = Math.min(slices[slices.length-1].time, time + Math.min(.1,(now-previous)/1000));
-    if (slices.length > 1 && time >= slices[1].time) slices.shift();
+    time = Math.min(slices[slices.length-1].time, time + (now-previous)/1000);
+    while (slices.length > 1 && time >= slices[1].time) slices.shift();
   }
-  previous = now;
+  previous = slices.length > 1 ? now : null;
   if (slices.length && (dirty || (moving && now-lastDraw >= 1000/30-1))) {
     const a = slices[0], b = slices[1] || a;
     renderer.draw(a,b,Math.max(0, Math.min(1,(time-a.time)/interval)));
@@ -453,7 +460,6 @@ canvas.addEventListener('webglcontextrestored', () => {
 });
 window.addEventListener('resize',resize);
 document.addEventListener('visibilitychange',resume);
-reducedMotion.addEventListener('change',resume);
 resize();
 </script>
 </body>
