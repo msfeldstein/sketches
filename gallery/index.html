@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Sketchbook</title>
+<meta name="description" content="Live generative canvas sketches from different AI models, side by side.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/gallery.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <h1 id="site-title">Model Sketchbook</h1>
+    <p id="site-subtitle" class="subtitle"></p>
+    <ul id="site-notes" class="notes"></ul>
+    <div class="controls">
+      <label class="toggle">
+        <input type="checkbox" id="pause-all">
+        <span>Pause all sketches</span>
+      </label>
+      <span class="hint">Tiles only run while on screen.</span>
+    </div>
+  </div>
+</header>
+<main id="rounds" class="wrap"></main>
+<footer class="site-footer wrap">
+  Embed any sketch with <code>&lt;iframe src="…/sketches/&lt;round&gt;/&lt;model&gt;/"&gt;</code>
+</footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="manifest.js"></script>
+<script src="assets/gallery.js"></script>
+</body>
+</html>
