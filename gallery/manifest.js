@@ -54,6 +54,7 @@ window.GALLERY_MANIFEST = {
         { id: "opus-5-5-a", model: "Opus 5.5", detail: "Take A · Cursor" },
         { id: "opus-5-5-b", model: "Opus 5.5", detail: "Take B · Cursor" },
         { id: "astra-6-2-high", model: "Astra 6.2", detail: "High reasoning · Codex" },
+        { id: "gemini-4-carbon-medium", model: "Gemini 4 Carbon (medium)" },
       ],
     },
   ],
