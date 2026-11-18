@@ -11,12 +11,13 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #070605;
+    background: #000000;
   }
   canvas {
     display: block;
     width: 100vw;
     height: 100vh;
+    cursor: crosshair;
   }
 </style>
 </head>
@@ -25,14 +26,31 @@
 <script>
 (() => {
   const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: false });
 
-  let width = 0, height = 0, dpr = 1;
-  let particles = [];
-  let bgGrains = [];
-  let mouse = { x: 0, y: 0, active: false };
+  let width = 0, height = 0, pw = 0, ph = 0, dpr = 1;
+  let imgData = null;
+  let frameBuf = null;
+  let bedBuf = null;
 
-  // Simple deterministic value noise / fbm for organic iris fibers & crypts
+  // Structure-of-Arrays for ~230k dynamic sand grains
+  let count = 0;
+  let pU, pCos, pSin, pWobble, pX, pY, pVX, pVY;
+  let pR, pG, pB, pSize, pLayer, pGlint;
+
+  let mouse = { x: 0, y: 0, vx: 0, vy: 0, active: false };
+
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function() {
+      a |= 0;
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
   function hash2(x, y) {
     let n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
     return n - Math.floor(n);
@@ -60,170 +78,632 @@
     return val;
   }
 
-  function collaretteRadius(theta) {
-    // Irregular zig-zaggy ring around ~0.34 of iris radius
-    const c1 = fbm(Math.cos(theta) * 3.2 + 10, Math.sin(theta) * 3.2 + 10, 4);
-    const c2 = Math.sin(theta * 19 + c1 * 6) * 0.022;
-    return 0.34 + (c1 - 0.5) * 0.11 + c2;
+  function wrapAngle(a) {
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    return a;
+  }
+
+  // Star-crowned irregular autonomic wreath (collarette)
+  function collaretteU(theta) {
+    const cx = Math.cos(theta), sy = Math.sin(theta);
+    const broad = fbm(cx * 2.6 + 8.3, sy * 2.6 - 4.1, 4) - 0.5;
+    const medium = fbm(cx * 6.5 - 12.7, sy * 6.5 + 9.2, 3) - 0.5;
+    // Pointed trabecular star peaks where radial arches meet
+    const points = Math.abs(Math.sin(theta * 14.0 + broad * 5.2 + medium * 3.0)) - 0.5;
+    const fine = Math.sin(theta * 29.0 + medium * 7.0) * 0.011;
+    return 0.315 + broad * 0.085 + medium * 0.042 + points * 0.046 + fine;
+  }
+
+  // Generate fixed anatomical features: diamond Crypts of Fuchs & iris freckles
+  const crypts = [];
+  const freckles = [];
+  (function initAnatomy() {
+    const rng = mulberry32(20261118);
+    // Primary diamond crypts just outside collarette
+    for (let i = 0; i < 42; i++) {
+      const th = (i / 42) * Math.PI * 2 + (rng() - 0.5) * 0.13;
+      const col = collaretteU(th);
+      const u = col + 0.045 + rng() * 0.24;
+      crypts.push({
+        th,
+        u,
+        wTh: 0.032 + rng() * 0.046,
+        wU: 0.055 + rng() * 0.095,
+        depth: 0.65 + rng() * 0.35
+      });
+    }
+    // Secondary mid-stroma lacunae
+    for (let i = 0; i < 28; i++) {
+      const th = rng() * Math.PI * 2;
+      const u = 0.52 + rng() * 0.26;
+      crypts.push({
+        th,
+        u,
+        wTh: 0.022 + rng() * 0.032,
+        wU: 0.045 + rng() * 0.075,
+        depth: 0.45 + rng() * 0.35
+      });
+    }
+    // Inner pupillary-zone spoke crypts
+    for (let i = 0; i < 24; i++) {
+      const th = (i / 24) * Math.PI * 2 + (rng() - 0.5) * 0.18;
+      const col = collaretteU(th);
+      crypts.push({
+        th,
+        u: 0.11 + rng() * (col - 0.16),
+        wTh: 0.035 + rng() * 0.042,
+        wU: 0.045 + rng() * 0.055,
+        depth: 0.55 + rng() * 0.35
+      });
+    }
+    // Natural melanin/copper sand freckles (iris nevi)
+    const freckleAngles = [0.68, 2.15, 2.32, 4.45, 5.58];
+    for (let i = 0; i < freckleAngles.length; i++) {
+      freckles.push({
+        th: freckleAngles[i] + (rng() - 0.5) * 0.15,
+        u: 0.44 + rng() * 0.32,
+        radU: 0.024 + rng() * 0.028,
+        radTh: 0.032 + rng() * 0.036,
+        warmth: rng()
+      });
+    }
+  })();
+
+  // Evaluate crypt opening depth & deflect stromal fibers smoothly around diamond openings
+  function evalCryptsAndDeflect(theta, u) {
+    let deflection = 0;
+    let maxCrypt = 0;
+    let rimRidge = 0;
+    for (let i = 0; i < crypts.length; i++) {
+      const c = crypts[i];
+      const du = (u - c.u) / c.wU;
+      if (du < -1.25 || du > 1.25) continue;
+      const dth = wrapAngle(theta - c.th) / c.wTh;
+      if (dth < -1.8 || dth > 1.8) continue;
+
+      // Diamond / spindle shape metric: sharp tips radially, arched sides angularly
+      const longitudinal = 1.0 - Math.abs(du);
+      if (longitudinal <= 0) continue;
+      const halfWidth = longitudinal * 0.95 + 0.05;
+      const normLat = Math.abs(dth) / halfWidth;
+
+      if (normLat < 1.0) {
+        const inside = (1.0 - normLat * normLat) * longitudinal * c.depth;
+        if (inside > maxCrypt) maxCrypt = inside;
+      }
+      // Part radial fibers outward around the spindle opening and heap them along the rim
+      if (normLat < 1.65) {
+        const sign = dth >= 0 ? 1 : -1;
+        const push = Math.exp(-normLat * normLat * 1.35) * longitudinal * c.wTh * 0.72 * c.depth;
+        deflection += sign * push;
+        if (normLat > 0.72 && normLat < 1.38) {
+          const ridge = Math.exp(-Math.pow((normLat - 1.02) / 0.22, 2)) * longitudinal * c.depth;
+          if (ridge > rimRidge) rimRidge = ridge;
+        }
+      }
+    }
+    return { theta: theta + deflection, crypt: maxCrypt, rimRidge };
+  }
+
+  function blendPixel(buf, idx, r, g, b, a256) {
+    buf[idx]     = buf[idx]     + (((r - buf[idx])     * a256) >> 8);
+    buf[idx + 1] = buf[idx + 1] + (((g - buf[idx + 1]) * a256) >> 8);
+    buf[idx + 2] = buf[idx + 2] + (((b - buf[idx + 2]) * a256) >> 8);
+  }
+
+  function shadowPixel(buf, idx, mul256) {
+    buf[idx]     = (buf[idx]     * mul256) >> 8;
+    buf[idx + 1] = (buf[idx + 1] * mul256) >> 8;
+    buf[idx + 2] = (buf[idx + 2] * mul256) >> 8;
+  }
+
+  // Render a single 3D faceted grain of sand into RGBA pixel buffer
+  function splatGrain(buf, w, h, x, y, r, g, b, sizeType, castShadow) {
+    const ix = x | 0;
+    const iy = y | 0;
+    if (ix < 2 || ix >= w - 3 || iy < 2 || iy >= h - 3) return;
+
+    const fx = x - ix;
+    const fy = y - iy;
+    const row = iy * w;
+
+    if (sizeType === 0) {
+      // Fine subpixel silt/sand grain (~1.2px)
+      if (castShadow) {
+        shadowPixel(buf, ((iy + 1) * w + ix + 1) << 2, 192);
+      }
+      const w00 = ((1 - fx) * (1 - fy) * 235) | 0;
+      const w10 = (fx * (1 - fy) * 225) | 0;
+      const w01 = ((1 - fx) * fy * 225) | 0;
+      const w11 = (fx * fy * 215) | 0;
+
+      const hr = r < 235 ? r + 18 : 255;
+      const hg = g < 235 ? g + 16 : 255;
+      const hb = b < 235 ? b + 14 : 255;
+      const sr = (r * 210) >> 8;
+      const sg = (g * 208) >> 8;
+      const sb = (b * 205) >> 8;
+
+      const i00 = (row + ix) << 2;
+      blendPixel(buf, i00, hr, hg, hb, w00);
+      blendPixel(buf, i00 + 4, r, g, b, w10);
+      const i01 = i00 + (w << 2);
+      blendPixel(buf, i01, r, g, b, w01);
+      blendPixel(buf, i01 + 4, sr, sg, sb, w11);
+    } else if (sizeType === 1) {
+      // Medium rounded faceted sand grain (~1.9px)
+      if (castShadow) {
+        const sRow1 = (iy + 1) * w;
+        const sRow2 = (iy + 2) * w;
+        shadowPixel(buf, (sRow1 + ix + 2) << 2, 172);
+        shadowPixel(buf, (sRow2 + ix + 1) << 2, 172);
+        shadowPixel(buf, (sRow2 + ix + 2) << 2, 196);
+      }
+      const hr = Math.min(255, ((r * 296) >> 8) + 10);
+      const hg = Math.min(255, ((g * 294) >> 8) + 9);
+      const hb = Math.min(255, ((b * 290) >> 8) + 8);
+      const sr = (r * 198) >> 8;
+      const sg = (g * 194) >> 8;
+      const sb = (b * 190) >> 8;
+
+      const i00 = (row + ix) << 2;
+      const i01 = i00 + (w << 2);
+      blendPixel(buf, i00, hr, hg, hb, 242);
+      blendPixel(buf, i00 + 4, r, g, b, 212);
+      blendPixel(buf, i01, r, g, b, 212);
+      blendPixel(buf, i01 + 4, sr, sg, sb, 224);
+      // Soft rounded edge bleed
+      blendPixel(buf, i00 - 4, hr, hg, hb, ((1 - fx) * 95) | 0);
+      blendPixel(buf, i00 - (w << 2), hr, hg, hb, ((1 - fy) * 95) | 0);
+    } else {
+      // Coarse crystalline mineral / quartz grain (~2.6px)
+      if (castShadow) {
+        const sRow1 = (iy + 1) * w;
+        const sRow2 = (iy + 2) * w;
+        shadowPixel(buf, (sRow1 + ix + 2) << 2, 154);
+        shadowPixel(buf, (sRow2 + ix + 1) << 2, 154);
+        shadowPixel(buf, (sRow2 + ix + 2) << 2, 162);
+      }
+      const hr = Math.min(255, ((r * 312) >> 8) + 16);
+      const hg = Math.min(255, ((g * 308) >> 8) + 15);
+      const hb = Math.min(255, ((b * 302) >> 8) + 13);
+      const sr = (r * 186) >> 8;
+      const sg = (g * 182) >> 8;
+      const sb = (b * 178) >> 8;
+
+      const rowM1 = (iy - 1) * w;
+      const rowP1 = (iy + 1) * w;
+
+      blendPixel(buf, (rowM1 + ix - 1) << 2, hr, hg, hb, 110);
+      blendPixel(buf, (rowM1 + ix) << 2,     hr, hg, hb, 215);
+      blendPixel(buf, (rowM1 + ix + 1) << 2, r,  g,  b,  95);
+
+      blendPixel(buf, (row + ix - 1) << 2,   hr, hg, hb, 215);
+      blendPixel(buf, (row + ix) << 2,       hr, hg, hb, 250);
+      blendPixel(buf, (row + ix + 1) << 2,   r,  g,  b,  218);
+
+      blendPixel(buf, (rowP1 + ix - 1) << 2, r,  g,  b,  95);
+      blendPixel(buf, (rowP1 + ix) << 2,     r,  g,  b,  218);
+      blendPixel(buf, (rowP1 + ix + 1) << 2, sr, sg, sb, 165);
+    }
+  }
+
+  function buildStaticSandBed() {
+    bedBuf = new Uint8Array(pw * ph * 4);
+    for (let i = 3; i < bedBuf.length; i += 4) {
+      bedBuf[i] = 255;
+    }
+
+    const rng = mulberry32(9918273);
+    const cx = pw * 0.5;
+    const cy = ph * 0.5;
+    const minDim = Math.min(pw, ph);
+    const outerR = minDim * 0.425;
+    const pupilR = outerR * 0.235;
+
+    // Populate fine dark volcanic basalt & pupil obsidian sand grains so 100% of background is sand particles
+    const bedGrains = Math.min(180000, Math.floor((pw * ph) / 9));
+    for (let i = 0; i < bedGrains; i++) {
+      const x = rng() * (pw - 6) + 3;
+      const y = rng() * (ph - 6) + 3;
+      const dx = x - cx;
+      const dy = y - cy;
+      const dist = Math.hypot(dx, dy);
+
+      // Skip dense mid-iris interior to save work, keep overlap margin for breathing pupil & outer rim
+      if (dist > pupilR * 1.16 && dist < outerR * 0.94) continue;
+
+      if (dist <= pupilR * 1.16) {
+        // Ultra-fine black obsidian sand inside the pupil aperture
+        const edgeShadow = smoothstep(pupilR * 0.72, pupilR * 1.02, dist);
+        const base = (5 + rng() * 9) * (1.0 - edgeShadow * 0.35);
+        const glint = rng() < 0.03 ? 10 : 0;
+        splatGrain(
+          bedBuf, pw, ph, x, y,
+          (base + glint) | 0,
+          (base + glint) | 0,
+          (base * 1.1 + glint) | 0,
+          0,
+          false
+        );
+      } else {
+        // Dark matte basalt sand surface surrounding the iris
+        const rimProx = Math.exp(-Math.max(0, dist - outerR) / (outerR * 0.35));
+        const lightGrad = 0.85 + 0.25 * ((-dx / minDim) * 0.6 - (dy / minDim) * 0.8);
+        const v = (10 + rng() * 16 + rimProx * 6) * lightGrad;
+        const warm = rng() * 3;
+        const sz = rng() < 0.18 ? 1 : 0;
+        splatGrain(
+          bedBuf, pw, ph, x, y,
+          (v + warm) | 0,
+          (v + warm * 0.5) | 0,
+          (v + 1) | 0,
+          sz,
+          sz > 0
+        );
+      }
+    }
+  }
+
+  function smoothstep(e0, e1, x) {
+    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
   }
 
   function buildParticles() {
-    particles = [];
-    bgGrains = [];
+    const rng = mulberry32(4202026);
+    const minDim = Math.min(pw, ph);
+    const outerR = minDim * 0.425;
+    const pupilFrac = 0.235;
 
-    const minDim = Math.min(width, height);
-    const outerR = minDim * 0.42;
-    const pupilR = outerR * 0.23;
+    // Scale grain count smoothly with viewport pixel area while staying crisp at 60fps
+    const targetTotal = Math.max(195000, Math.min(260000, Math.floor(outerR * outerR * 1.18)));
+    const temp = [];
 
-    // Subtle dark obsidian/basalt sand bed outside and inside so everything visible is sand grains
-    const bedCount = Math.min(18000, Math.floor((width * height) / 95));
-    for (let i = 0; i < bedCount; i++) {
-      const x = Math.random() * width;
-      const y = Math.random() * height;
-      const dx = x - width * 0.5;
-      const dy = y - height * 0.5;
-      const dist = Math.hypot(dx, dy);
-      if (dist > pupilR * 0.96 && dist < outerR * 1.02) continue;
-      const shade = dist < pupilR ? (8 + Math.random() * 14) : (12 + Math.random() * 20);
-      bgGrains.push({
-        x, y,
-        size: 0.6 + Math.random() * 1.1,
-        r: shade + 3,
-        g: shade + 1,
-        b: shade,
-        a: 0.35 + Math.random() * 0.45
-      });
-    }
+    const mainBundles = 360;
+    const superBundles = 148;
+    const sphincterSpokes = 290;
 
-    const total = 65000;
-    const fiberBundles = 210;
+    // Light direction (top-left raking illumination)
+    const lx = -0.62, ly = -0.78;
 
-    for (let i = 0; i < total; i++) {
-      // Pick radial position normalized u in [0, 1] from pupilR to outerR
-      let u = Math.random();
-      // Bias slightly toward collarette and pupil ruff for anatomical density
-      if (Math.random() < 0.28) {
-        u = 0.32 + (Math.random() - 0.5) * 0.22;
-      } else if (Math.random() < 0.12) {
-        u = Math.pow(Math.random(), 2.2) * 0.15;
-      }
-      u = Math.max(0, Math.min(1, u));
+    for (let i = 0; i < targetTotal; i++) {
+      const roleRoll = rng();
+      let u, theta, layer = 1, sizeType = 0, glint = 0;
+      let cr = 0, cg = 0, cb = 0;
 
-      // Bundle angle so grains align along stromal trabeculae / radial fibers
-      const bundleIdx = Math.floor(Math.random() * fiberBundles);
-      const baseTheta = (bundleIdx / fiberBundles) * Math.PI * 2;
-      const bundleJitter = (Math.random() - 0.5) * ((Math.PI * 2) / fiberBundles) * 1.35;
-      let theta = baseTheta + bundleJitter;
-
-      // Wavy radial fiber distortion
-      const wave = (fbm(Math.cos(baseTheta) * 4 + u * 2.6, Math.sin(baseTheta) * 4 - u * 2.6, 3) - 0.5) * 0.09;
-      theta += wave * Math.sin(u * Math.PI);
-
-      const colU = collaretteRadius(theta);
-      // Normalized radius from center where pupil is 0.23 and outer limbus is 1.0
-      const normR = 0.23 + u * 0.77;
-
-      // Crypts of Fuchs: dark openings near collarette and mid-stroma where fewer bright grains settle
-      const cryptNoise = fbm(Math.cos(theta) * 7.5 + normR * 5.5, Math.sin(theta) * 7.5 + normR * 5.5, 4);
-      const nearCol = Math.exp(-Math.pow((u - colU) / 0.18, 2));
-      const inCrypt = cryptNoise < (0.37 + nearCol * 0.08);
-
-      // Skip half of crypt grains or make them deep shadow grains
-      if (inCrypt && Math.random() < 0.52) continue;
-
-      const r = normR * outerR;
-
-      // Palette mixing: realistichazel-amber-teal-slate sand minerals
-      // Inner pupillary ruff: dark burnt umber / espresso sand
-      // Collarette: warm goldenrod, amber, ochre quartz
-      // Ciliary zone (mid-outer): olive-teal, sea-glass green, feldspar beige, raw sienna
-      // Limbal ring (outer edge): deep charcoal-indigo & dark umber basalt grains
-      const colPeak = Math.exp(-Math.pow((u - colU) / 0.11, 2));
-      const innerZone = u < colU ? 1 : 0;
-      const limbus = Math.pow(Math.max(0, (u - 0.78) / 0.22), 1.5);
-      const ruff = Math.exp(-Math.pow(u / 0.045, 2));
-
-      const sectorVar = fbm(Math.cos(theta) * 2.1 + 4, Math.sin(theta) * 2.1 + 4, 3);
-
-      let cr, cg, cb;
-      if (ruff > 0.45 && Math.random() < ruff) {
-        // Pupillary ruff dark iron-rich sand
-        cr = 58 + Math.random() * 35;
-        cg = 34 + Math.random() * 20;
-        cb = 20 + Math.random() * 14;
-      } else if (Math.random() < colPeak * 0.78 + innerZone * 0.35) {
-        // Warm amber / golden ochre / honey quartz
-        const warmShift = Math.random();
-        cr = 185 + warmShift * 58;
-        cg = 128 + warmShift * 62 - (1 - sectorVar) * 20;
-        cb = 52 + warmShift * 42;
-      } else {
-        // Ciliary stroma: sea-slate, pale celadon, warm sand, turquoise-grey
-        const mineral = Math.random();
-        if (mineral < 0.45) {
-          // Pale silica / feldspar fiber highlight
-          cr = 162 + sectorVar * 45;
-          cg = 172 + sectorVar * 38;
-          cb = 148 + (1 - sectorVar) * 35;
-        } else if (mineral < 0.8) {
-          // Cool slate-teal / olive sand
-          cr = 74 + sectorVar * 38;
-          cg = 118 + sectorVar * 42;
-          cb = 116 + (1 - sectorVar) * 44;
+      if (roleRoll < 0.045) {
+        // 1. Spilled loose sand halo outside the limbal ring (u in 0.985 .. 1.17)
+        const falloff = Math.pow(rng(), 2.3);
+        u = 0.985 + falloff * 0.19;
+        // Slight radial trickle clustering
+        const trickleIdx = Math.floor(rng() * 190);
+        theta = (trickleIdx / 190) * Math.PI * 2 + (rng() - 0.5) * (0.025 + falloff * 0.08);
+        const escapedIrisMineral = rng();
+        if (escapedIrisMineral < 0.62) {
+          // Dark basalt/slate limbal sand
+          const s = 26 + rng() * 32;
+          cr = s + 2; cg = s + 3; cb = s + 7;
+        } else if (escapedIrisMineral < 0.86) {
+          // Stray celadon / feldspar silica grain
+          cr = 128 + rng() * 58;
+          cg = 142 + rng() * 54;
+          cb = 126 + rng() * 46;
         } else {
-          // flecks of copper/rust pigment granules
-          cr = 168 + Math.random() * 45;
-          cg = 108 + Math.random() * 35;
-          cb = 56 + Math.random() * 25;
+          // Stray golden amber quartz grain
+          cr = 186 + rng() * 52;
+          cg = 136 + rng() * 46;
+          cb = 68 + rng() * 34;
+        }
+        sizeType = rng() < 0.22 ? 2 : (rng() < 0.65 ? 1 : 0);
+        layer = 1;
+        glint = rng() < 0.25 ? rng() : 0;
+      } else if (roleRoll < 0.105) {
+        // 2. Pupillary Ruff (crenulated dark espresso/iron-oxide beaded inner margin)
+        const beadCount = 78;
+        const beadPhase = rng() * beadCount;
+        const beadCenter = Math.floor(beadPhase) + 0.5;
+        const distFromBead = Math.abs(beadPhase - beadCenter) * 2.0;
+        theta = (beadPhase / beadCount) * Math.PI * 2;
+        const lobeOut = (1.0 - distFromBead * distFromBead) * 0.016;
+        u = -0.012 + rng() * 0.036 + lobeOut * 0.4;
+
+        const rich = rng();
+        cr = 52 + rich * 56;
+        cg = 25 + rich * 28;
+        cb = 14 + rich * 16;
+        // Sunlit top-left vs shaded inner rim
+        const nx = -Math.cos(theta), ny = -Math.sin(theta);
+        const rimLight = 0.78 + 0.34 * Math.max(-0.5, nx * lx + ny * ly);
+        cr *= rimLight; cg *= rimLight; cb *= rimLight;
+        sizeType = rng() < 0.55 ? 1 : 0;
+        layer = 2;
+      } else {
+        // 3. Main Iris Stroma, Sphincter, Collarette Crown & Superficial Trabeculae
+        const zoneRoll = rng();
+        let isSuperficial = false;
+        let isDeepBed = false;
+
+        if (zoneRoll < 0.22) {
+          // Concentrated around collarette crown & sphincter zone
+          u = 0.02 + Math.pow(rng(), 0.88) * 0.42;
+        } else if (zoneRoll < 0.36) {
+          // Superficial arched collagen trabeculae
+          isSuperficial = true;
+          u = 0.24 + Math.pow(rng(), 0.85) * 0.68;
+        } else if (zoneRoll < 0.54) {
+          // Deep stromal floor & crypt interior bed
+          isDeepBed = true;
+          u = 0.03 + rng() * 0.96;
+        } else {
+          // Full radial sweep out to limbal ring
+          u = 0.025 + Math.pow(rng(), 0.92) * 0.975;
+        }
+
+        // Align grains into radial fiber cords
+        let cordCenterOffset = 0;
+        if (isSuperficial) {
+          const bIdx = Math.floor(rng() * superBundles);
+          const baseTh = (bIdx / superBundles) * Math.PI * 2;
+          const spread = (rng() + rng() - 1.0) * ((Math.PI * 2) / superBundles) * 0.48;
+          cordCenterOffset = Math.abs(spread) / (((Math.PI * 2) / superBundles) * 0.48);
+          const arch = Math.sin(u * 7.5 + hash2(bIdx, 3.1) * 6.28) * 0.028 * (1 - u * 0.4);
+          theta = baseTh + spread + arch;
+        } else if (u < 0.31 && !isDeepBed) {
+          const bIdx = Math.floor(rng() * sphincterSpokes);
+          const baseTh = (bIdx / sphincterSpokes) * Math.PI * 2;
+          const spread = (rng() + rng() - 1.0) * ((Math.PI * 2) / sphincterSpokes) * 0.62;
+          cordCenterOffset = Math.abs(spread) / (((Math.PI * 2) / sphincterSpokes) * 0.62);
+          const wave = (fbm(Math.cos(baseTh) * 5 + u * 4, Math.sin(baseTh) * 5 - u * 4, 2) - 0.5) * 0.035;
+          theta = baseTh + spread + wave;
+        } else if (!isDeepBed) {
+          const bIdx = Math.floor(rng() * mainBundles);
+          const baseTh = (bIdx / mainBundles) * Math.PI * 2;
+          const spread = (rng() + rng() - 1.0) * ((Math.PI * 2) / mainBundles) * 0.72;
+          cordCenterOffset = Math.abs(spread) / (((Math.PI * 2) / mainBundles) * 0.72);
+          // Natural radial trabecular undulation
+          const wave = (fbm(Math.cos(baseTh) * 3.8 + u * 2.8, Math.sin(baseTh) * 3.8 - u * 2.8, 3) - 0.5) * 0.068;
+          theta = baseTh + spread + wave * Math.sin(u * Math.PI);
+        } else {
+          theta = rng() * Math.PI * 2;
+          cordCenterOffset = 0.7;
+        }
+
+        // Part stromal fibers around diamond Crypts of Fuchs
+        const cd = evalCryptsAndDeflect(theta, u);
+        if (!isDeepBed) {
+          theta = cd.theta;
+        }
+
+        // Re-evaluate crypt depth at deflected position + fine organic micro-lacunae
+        const colU = collaretteU(theta);
+        const microCrypt = fbm(Math.cos(theta) * 11.0 + u * 8.5, Math.sin(theta) * 11.0 - u * 8.5, 3);
+        const inCrypt = cd.crypt > 0.18 || (!isSuperficial && microCrypt < 0.27 && u > 0.12 && u < 0.76);
+        const cryptStrength = Math.max(cd.crypt, microCrypt < 0.27 ? (0.27 - microCrypt) * 2.6 : 0);
+
+        // Upper fiber layers thin out dramatically inside crypt openings so dark crypt pits show through
+        if (inCrypt && !isDeepBed) {
+          if (rng() < Math.min(0.92, cryptStrength * 1.15)) continue;
+        }
+
+        // Anatomical zone weights
+        const distCol = u - colU;
+        const colCrown = Math.exp(-Math.pow(distCol / 0.062, 2));
+        const colHalo = Math.exp(-Math.pow(distCol / 0.145, 2));
+        const isInner = u < colU;
+        const limbus = smoothstep(0.80, 0.995, u);
+
+        // Concentric contraction furrows in outer ciliary zone
+        let furrowDip = 0;
+        if (u > 0.52 && u < 0.88) {
+          const fPhase = Math.sin((u - 0.54) * 56.0 + fbm(Math.cos(theta) * 3, Math.sin(theta) * 3, 2) * 3.2);
+          const arcMask = fbm(Math.cos(theta) * 2.2 - 5.0, Math.sin(theta) * 2.2 + 5.0, 2);
+          if (fPhase > 0.72 && arcMask > 0.42) {
+            furrowDip = (fPhase - 0.72) / 0.28 * 0.35;
+          }
+        }
+
+        // Angular sector color variation (realistic hazel-emerald-slate-gold variation)
+        const sec1 = fbm(Math.cos(theta) * 1.8 + 3.1, Math.sin(theta) * 1.8 - 2.4, 3);
+        const sec2 = fbm(Math.cos(theta) * 4.5 - 7.2, Math.sin(theta) * 4.5 + 6.1, 2);
+
+        // Check iris pigment nevi / freckles
+        let freckleAmt = 0;
+        for (let f = 0; f < freckles.length; f++) {
+          const fr = freckles[f];
+          const dth = wrapAngle(theta - fr.th) / fr.radTh;
+          const du = (u - fr.u) / fr.radU;
+          const d2 = dth * dth + du * du;
+          if (d2 < 1.3) {
+            const noisyEdge = 1.0 + (sec2 - 0.5) * 0.55;
+            if (d2 < noisyEdge) {
+              freckleAmt = Math.max(freckleAmt, 1.0 - d2 / noisyEdge);
+            }
+          }
+        }
+
+        // Mineral sand color assignment
+        if (freckleAmt > 0.22 && rng() < freckleAmt * 0.88) {
+          // Rich rust / copper / dark amber melanin sand cluster
+          const m = rng();
+          cr = 112 + m * 78;
+          cg = 56 + m * 46;
+          cb = 22 + m * 22;
+          layer = 2;
+        } else if (isDeepBed || inCrypt) {
+          // Deep stromal floor: dark chocolate-umber near pupil/collarette, deep sea-pine/charcoal-teal further out
+          if (isInner || rng() < colHalo * 0.65) {
+            cr = 44 + rng() * 34;
+            cg = 28 + rng() * 22;
+            cb = 18 + rng() * 14;
+          } else {
+            cr = 22 + sec1 * 24 + rng() * 16;
+            cg = 40 + sec1 * 32 + rng() * 20;
+            cb = 44 + (1 - sec1) * 28 + rng() * 18;
+          }
+          layer = 0;
+        } else if (rng() < colCrown * 0.86 + (isInner ? 0.56 : 0.0) + colHalo * 0.28) {
+          // Central heterochromia & collarette crown: glowing Baltic amber, golden ochre, honey quartz, raw sienna
+          const w = rng();
+          if (w < 0.32 && colCrown > 0.45) {
+            // Pale sunlit champagne / citrine quartz crest grain
+            cr = 226 + rng() * 28;
+            cg = 184 + rng() * 42;
+            cb = 104 + rng() * 42;
+            glint = 0.4 + rng() * 0.6;
+          } else if (w < 0.76) {
+            // Warm golden amber / honey ochre sand
+            cr = 184 + w * 56;
+            cg = 122 + w * 54 - (1 - sec1) * 16;
+            cb = 44 + w * 38;
+          } else {
+            // Rich burnt sienna / copper-garnet sand
+            cr = 148 + rng() * 44;
+            cg = 78 + rng() * 34;
+            cb = 28 + rng() * 22;
+          }
+          layer = colCrown > 0.45 ? 3 : 2;
+        } else if (isSuperficial) {
+          // Superficial gossamer collagen trabeculae: warm frosted beach silica, pale celadon, cream feldspar
+          const m = rng();
+          const warmTint = colHalo * 0.5 + sec1 * 0.3;
+          cr = 172 + m * 44 + warmTint * 24;
+          cg = 178 + m * 38 + warmTint * 10;
+          cb = 148 + m * 34 - warmTint * 20;
+          layer = 3;
+          if (rng() < 0.20) glint = 0.35 + rng() * 0.65;
+        } else {
+          // Main ciliary radial fiber bundles: sea-glass celadon, olive-gold, slate-turquoise, driftwood feldspar
+          const m = rng();
+          if (m < 0.42) {
+            // Celadon / sage-olive sand cord
+            cr = 114 + sec1 * 54 + sec2 * 18;
+            cg = 148 + sec1 * 42 + sec2 * 16;
+            cb = 126 + (1 - sec1) * 38 + sec2 * 10;
+          } else if (m < 0.74) {
+            // Deeper slate-teal / peacock-olive mineral sand
+            cr = 58 + sec1 * 38;
+            cg = 98 + sec1 * 38;
+            cb = 100 + (1 - sec1) * 40;
+          } else if (m < 0.90) {
+            // Warm feldspar / silica highlight grain along cord crest
+            cr = 168 + sec1 * 38;
+            cg = 172 + sec1 * 34;
+            cb = 142 + (1 - sec1) * 28;
+          } else {
+            // Scattered warm ochre / hazel pigment granule in ciliary zone
+            cr = 166 + rng() * 46;
+            cg = 118 + rng() * 36;
+            cb = 54 + rng() * 26;
+          }
+          layer = cd.rimRidge > 0.25 ? 2 : 1;
+        }
+
+        // Cord cylindrical relief shading (crest of each radial fiber bundle is brighter than its groove)
+        const cordCrest = 1.06 - cordCenterOffset * 0.18;
+
+        // Macro 3D topography lighting: collarette rises into a ridge and slopes down both inward and outward
+        const radialDirX = Math.cos(theta), radialDirY = Math.sin(theta);
+        const slopeRadial = -distCol / (0.065 + Math.abs(distCol)) * colHalo * 0.45 - limbus * 0.35;
+        const macroDot = radialDirX * lx + radialDirY * ly;
+        const topoLight = 1.0 + slopeRadial * macroDot * 0.38 + cd.rimRidge * 0.12 - furrowDip;
+
+        // Limbal ring darkening (transitions smoothly into dark charcoal-indigo basalt grains)
+        if (limbus > 0.001) {
+          const darkR = 20 + rng() * 20;
+          const darkG = 24 + rng() * 22;
+          const darkB = 30 + rng() * 26;
+          const mix = limbus * 0.88;
+          cr = cr * (1 - mix) + darkR * mix;
+          cg = cg * (1 - mix) + darkG * mix;
+          cb = cb * (1 - mix) + darkB * mix;
+        }
+
+        // Individual sand grain mineral variance
+        const grainVar = 0.86 + rng() * 0.28;
+        const shade = cordCrest * topoLight * grainVar * (inCrypt ? (0.42 + (1 - cryptStrength) * 0.3) : 1.0);
+
+        cr = Math.max(6, Math.min(255, cr * shade));
+        cg = Math.max(6, Math.min(255, cg * shade));
+        cb = Math.max(6, Math.min(255, cb * shade));
+
+        // Grain size distribution: finer in deep pits & outer limbus, slightly coarser crystalline grains on collarette & superficial cords
+        const sizeRoll = rng();
+        if (layer === 3 && sizeRoll < 0.24) {
+          sizeType = 2;
+        } else if (layer === 0) {
+          sizeType = sizeRoll < 0.25 ? 1 : 0;
+        } else {
+          sizeType = sizeRoll < 0.07 ? 2 : (sizeRoll < 0.56 ? 1 : 0);
+        }
+
+        if (glint === 0 && rng() < 0.065) {
+          glint = 0.3 + rng() * 0.7;
         }
       }
 
-      // Darken inside crypts and outer limbal ring
-      let shade = 1.0;
-      if (inCrypt) shade *= 0.36 + Math.random() * 0.22;
-      shade *= (1.0 - limbus * 0.72);
-
-      // Directional grain lighting (top-left light source catching individual sand facets)
-      const lx = -0.6, ly = -0.8;
-      const nx = Math.cos(theta), ny = Math.sin(theta);
-      const ridgeSlope = (u - colU) < 0 ? -1 : 1;
-      const facet = 0.82 + 0.32 * (Math.random() - 0.3) + 0.12 * (nx * lx + ny * ly) * ridgeSlope;
-      const spec = Math.random() < 0.045 ? 1.35 : 1.0;
-
-      cr = Math.min(255, Math.max(8, cr * shade * facet * spec));
-      cg = Math.min(255, Math.max(8, cg * shade * facet * spec));
-      cb = Math.min(255, Math.max(8, cb * shade * facet * spec));
-
-      const size = (0.65 + Math.random() * 1.35) * (spec > 1 ? 1.15 : 1.0);
-
-      particles.push({
+      temp.push({
         u,
         theta,
-        rFrac: normR,
-        x: 0,
-        y: 0,
-        vx: 0,
-        vy: 0,
-        size,
         cr: cr | 0,
         cg: cg | 0,
         cb: cb | 0,
-        alpha: inCrypt ? 0.55 : (0.68 + Math.random() * 0.3),
-        seed: Math.random() * 1000,
-        layer: inCrypt ? 0 : (colPeak > 0.5 ? 2 : 1)
+        sizeType,
+        layer,
+        glint
       });
     }
 
-    // Sort depth layers so upper stromal fibers & collarette ridge sit atop deeper crypt grains
-    particles.sort((a, b) => a.layer - b.layer);
+    // Sort strictly back-to-front by anatomical depth layer so raised fiber & collarette grains shadow lower layers
+    temp.sort((a, b) => a.layer - b.layer);
 
-    const cx = width * 0.5;
-    const cy = height * 0.5;
-    for (let i = 0; i < particles.length; i++) {
-      const p = particles[i];
-      const rad = p.rFrac * outerR;
-      p.x = cx + Math.cos(p.theta) * rad;
-      p.y = cy + Math.sin(p.theta) * rad;
+    count = temp.length;
+    pU = new Float32Array(count);
+    pCos = new Float32Array(count);
+    pSin = new Float32Array(count);
+    pWobble = new Float32Array(count);
+    pX = new Float32Array(count);
+    pY = new Float32Array(count);
+    pVX = new Float32Array(count);
+    pVY = new Float32Array(count);
+    pR = new Uint8Array(count);
+    pG = new Uint8Array(count);
+    pB = new Uint8Array(count);
+    pSize = new Uint8Array(count);
+    pLayer = new Uint8Array(count);
+    pGlint = new Float32Array(count);
+
+    const cx = pw * 0.5;
+    const cy = ph * 0.5;
+
+    for (let i = 0; i < count; i++) {
+      const item = temp[i];
+      const th = item.theta;
+      const cosT = Math.cos(th);
+      const sinT = Math.sin(th);
+      // Subtle organic non-circularity & crenulation of the pupil margin
+      const wob = (fbm(cosT * 3.4 + 2.1, sinT * 3.4 - 1.7, 3) - 0.5) * 0.016
+                + Math.sin(th * 78.0) * 0.0028 * Math.max(0, 1.0 - item.u * 8.0);
+
+      pU[i] = item.u;
+      pCos[i] = cosT;
+      pSin[i] = sinT;
+      pWobble[i] = wob;
+      pR[i] = item.cr;
+      pG[i] = item.cg;
+      pB[i] = item.cb;
+      pSize[i] = item.sizeType;
+      pLayer[i] = item.layer;
+      pGlint[i] = item.glint;
+
+      const pf = pupilFrac + wob;
+      const rFrac = item.u <= 1.0
+        ? (pf + item.u * (1.0 - pf))
+        : (1.0 + (item.u - 1.0) * 0.765);
+      const rad = rFrac * outerR;
+      pX[i] = cx + cosT * rad;
+      pY[i] = cy + sinT * rad;
     }
   }
 
@@ -231,18 +711,36 @@
     dpr = Math.min(window.devicePixelRatio || 1, 2);
     width = window.innerWidth;
     height = window.innerHeight;
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    pw = Math.max(10, Math.floor(width * dpr));
+    ph = Math.max(10, Math.floor(height * dpr));
+    canvas.width = pw;
+    canvas.height = ph;
+
+    imgData = ctx.createImageData(pw, ph);
+    frameBuf = new Uint8Array(imgData.data.buffer);
+
+    buildStaticSandBed();
     buildParticles();
   }
 
-  window.addEventListener('resize', resize);
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resize, 80);
+  });
+
   window.addEventListener('pointermove', (e) => {
-    mouse.x = e.clientX;
-    mouse.y = e.clientY;
+    const nx = e.clientX * dpr;
+    const ny = e.clientY * dpr;
+    if (mouse.active) {
+      mouse.vx = nx - mouse.x;
+      mouse.vy = ny - mouse.y;
+    }
+    mouse.x = nx;
+    mouse.y = ny;
     mouse.active = true;
   });
+
   window.addEventListener('pointerleave', () => {
     mouse.active = false;
   });
@@ -253,61 +751,91 @@
 
   function frame(now) {
     const t = (now - startTime) * 0.001;
-    ctx.clearRect(0, 0, width, height);
 
-    const cx = width * 0.5;
-    const cy = height * 0.5;
-    const minDim = Math.min(width, height);
-    const outerR = minDim * 0.42;
+    // Copy pre-rendered volcanic/obsidian sand bed
+    frameBuf.set(bedBuf);
 
-    // Subtle organic hippus (pupil dilation/contraction breathing)
-    const pupilPulse = Math.sin(t * 0.85) * 0.014 + Math.sin(t * 2.1) * 0.005;
-    const curPupilFrac = 0.23 + pupilPulse;
+    const cx = pw * 0.5;
+    const cy = ph * 0.5;
+    const minDim = Math.min(pw, ph);
+    const outerR = minDim * 0.425;
 
-    // Render dark basalt bed grains
-    for (let i = 0; i < bgGrains.length; i++) {
-      const g = bgGrains[i];
-      ctx.fillStyle = `rgba(${g.r},${g.g},${g.b},${g.a})`;
-      ctx.fillRect(g.x, g.y, g.size, g.size);
-    }
+    // Natural physiological hippus (subtle autonomous pupil breathing)
+    const pupilPulse = Math.sin(t * 0.75) * 0.011 + Math.sin(t * 1.9 + 0.8) * 0.004;
+    const curPupilFrac = 0.235 + pupilPulse;
 
-    // Update & render iris sand grains
-    for (let i = 0; i < particles.length; i++) {
-      const p = particles[i];
-      const targetFrac = curPupilFrac + p.u * (1.0 - curPupilFrac);
-      // Slight radial accordion stretch of fibers as pupil breathes
-      const shimmer = Math.sin(t * 1.4 + p.seed) * 0.35;
-      const targetR = targetFrac * outerR + shimmer;
-      const tx = cx + Math.cos(p.theta) * targetR;
-      const ty = cy + Math.sin(p.theta) * targetR;
+    const mActive = mouse.active;
+    const mx = mouse.x, my = mouse.y;
+    const mvx = mouse.vx * 0.16, mvy = mouse.vy * 0.16;
+    mouse.vx *= 0.85;
+    mouse.vy *= 0.85;
+    const brushR = outerR * 0.15;
+    const brushR2 = brushR * brushR;
 
-      // Spring settle toward anatomical home position
-      p.vx += (tx - p.x) * 0.12;
-      p.vy += (ty - p.y) * 0.12;
+    const tGlint = t * 0.28;
 
-      // Pointer brushes sand grains gently like wind / fingertip over fine sand
-      if (mouse.active) {
-        const dx = p.x - mouse.x;
-        const dy = p.y - mouse.y;
+    for (let i = 0; i < count; i++) {
+      const u = pU[i];
+      const pf = curPupilFrac + pWobble[i];
+
+      const rFrac = u <= 1.0
+        ? (pf + u * (1.0 - pf))
+        : (1.0 + (u - 1.0) * 0.765);
+      const targetR = rFrac * outerR;
+      const tx = cx + pCos[i] * targetR;
+      const ty = cy + pSin[i] * targetR;
+
+      let x = pX[i];
+      let y = pY[i];
+      let vx = pVX[i] + (tx - x) * 0.11;
+      let vy = pVY[i] + (ty - y) * 0.11;
+
+      let disturb = 0;
+      if (mActive) {
+        const dx = x - mx;
+        const dy = y - my;
         const d2 = dx * dx + dy * dy;
-        const brushR = outerR * 0.18;
-        if (d2 < brushR * brushR && d2 > 0.01) {
+        if (d2 < brushR2 && d2 > 0.01) {
           const d = Math.sqrt(d2);
-          const force = (1 - d / brushR) * 1.65;
-          p.vx += (dx / d) * force;
-          p.vy += (dy / d) * force;
+          const fall = 1.0 - d / brushR;
+          const push = fall * fall * 1.55 * dpr;
+          vx += (dx / d) * push + mvx * fall;
+          vy += (dy / d) * push + mvy * fall;
+          disturb = fall;
         }
       }
 
-      p.vx *= 0.78;
-      p.vy *= 0.78;
-      p.x += p.vx;
-      p.y += p.vy;
+      vx *= 0.76;
+      vy *= 0.76;
+      x += vx;
+      y += vy;
 
-      ctx.fillStyle = `rgba(${p.cr},${p.cg},${p.cb},${p.alpha})`;
-      ctx.fillRect(p.x - p.size * 0.5, p.y - p.size * 0.5, p.size, p.size);
+      pX[i] = x;
+      pY[i] = y;
+      pVX[i] = vx;
+      pVY[i] = vy;
+
+      let r = pR[i];
+      let g = pG[i];
+      let b = pB[i];
+
+      // Crystalline quartz/mica sand facets subtly catch the light as fibers breathe or scatter
+      const gl = pGlint[i];
+      if (gl > 0) {
+        const phase = tGlint + gl * 5.0 + (vx + vy) * 0.35;
+        const tri = 1.0 - Math.abs(((phase - Math.floor(phase)) * 2.0) - 1.0) * 2.0;
+        if (tri > 0.52 || disturb > 0.15) {
+          const boost = (tri > 0.52 ? (tri - 0.52) * 46 * gl : 0) + disturb * 30;
+          r = Math.min(252, (r + boost) | 0);
+          g = Math.min(242, (g + boost * 0.92) | 0);
+          b = Math.min(218, (b + boost * 0.76) | 0);
+        }
+      }
+
+      splatGrain(frameBuf, pw, ph, x, y, r, g, b, pSize[i], pLayer[i] > 0);
     }
 
+    ctx.putImageData(imgData, 0, 0);
     requestAnimationFrame(frame);
   }
 
