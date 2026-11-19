@@ -63,6 +63,10 @@ window.GALLERY_MANIFEST = {
             6: "Also told: drop the waviness, particles animate outward freeing the center, individual grains not a mesh",
           },
         },
+        {
+          id: "gemini-4-carbon-medium", model: "Gemini 4 Carbon (medium)",
+          stageNotes: { 2: "Revised after feedback that it looked like a mosaic, not HD realistic" },
+        },
       ],
     },
     {
