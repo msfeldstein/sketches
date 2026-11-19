@@ -344,8 +344,9 @@
     const supSteps   = Math.round(205 * Math.sqrt(areaScale));
     const ruffCount  = Math.round(52000 * areaScale);
     const mistCount  = Math.round(85000 * areaScale);
+    const boltGrains = Math.round(145000 * areaScale);
 
-    const CAP = pupilCount + bedCount + feltCount + mainFibers * mainSteps + supFibers * Math.ceil(supSteps * 1.35) + ruffCount + mistCount + 16000;
+    const CAP = pupilCount + bedCount + feltCount + mainFibers * mainSteps + supFibers * Math.ceil(supSteps * 1.35) + ruffCount + mistCount + boltGrains + 16000;
 
     const stU     = new Float32Array(CAP);
     const stCos   = new Float32Array(CAP);
@@ -558,10 +559,39 @@
       emit(driftSpan, th, lum, 0.38 + rng() * 0.32, alpha, 3, 2);
     }
 
-    // O(N) counting sort back-to-front by anatomical layer (0 -> 1 -> 2 -> 3)
-    const counts = [0, 0, 0, 0];
+    // 7. Layer 4: Dedicated High-DPI Bio-Electric Filament, Fork & Ionized Bloom Sand Particles
+    for (let i = 0; i < boltGrains; i++) {
+      const boltIdx = i % 12;
+      const sAlong = rng();
+      const roleRoll = rng();
+      // branchCode: 0 = crisp core arc, 1 = Y-fork A, 2 = Y-fork B, 3 = ionized sand-glow halo & micro-sparks
+      const branchCode = roleRoll < 0.42 ? 0.0 : (roleRoll < 0.60 ? 1.0 : (roleRoll < 0.76 ? 2.0 : 3.0));
+      const crossGauss = (rng() + rng() + rng() - 1.5) * 0.667;
+
+      if (n < CAP) {
+        stU[n]     = sAlong;
+        stCos[n]   = boltIdx;
+        stSin[n]   = branchCode;
+        stWob[n]   = crossGauss;
+        stLum[n]   = branchCode < 2.5 ? 1.0 : (0.85 + rng() * 0.15);
+        stRad[n]   = branchCode < 0.5 ? (0.62 + rng() * 0.44) : (branchCode < 2.5 ? (0.50 + rng() * 0.36) : (0.72 + rng() * 0.65));
+        stAlpha[n] = branchCode < 0.5 ? 0.82 : (branchCode < 2.5 ? 0.68 : 0.16);
+        stPack[n]  = rng() + 6.0;
+        stLayer[n] = 4;
+        n++;
+      }
+    }
+
+    // O(N) counting sort back-to-front by anatomical layer (0 -> 1 -> 2 -> 3 -> 4)
+    const counts = [0, 0, 0, 0, 0];
     for (let i = 0; i < n; i++) counts[stLayer[i]]++;
-    const offsets = [0, counts[0], counts[0] + counts[1], counts[0] + counts[1] + counts[2]];
+    const offsets = [
+      0,
+      counts[0],
+      counts[0] + counts[1],
+      counts[0] + counts[1] + counts[2],
+      counts[0] + counts[1] + counts[2] + counts[3]
+    ];
 
     const interleaved = new Float32Array(n * 8);
     const cur = offsets.slice();
@@ -577,7 +607,7 @@
       interleaved[dst + 7] = stPack[i];
     }
 
-    return { count: n, data: interleaved, builtOuterR: outerRPx };
+    return { count: n, irisEnd: offsets[4], data: interleaved, builtOuterR: outerRPx };
   }
 
   // Interactive viscous sand-brush wake grid
@@ -611,20 +641,20 @@
   let cssW = 0, cssH = 0, dpr = 1, pw = 0, ph = 0;
   let sand = null;
 
-  // High-DPI polar noise FBO resolution & 8 small bio-electric current channels
+  // High-DPI polar noise FBO resolution & 12 small bio-electric current channels
   const NOISE_W = 640, NOISE_H = 320;
-  const NUM_BOLTS = 8;
+  const NUM_BOLTS = 12;
   const boltDirs   = new Float32Array(NUM_BOLTS * 4); // [cosTh, sinTh, uHead, tailLen]
   const boltParams = new Float32Array(NUM_BOLTS * 4); // [uMin, uMax, intensity, seedAndMode]
 
   function updateElectricBolts(t) {
     for (let k = 0; k < NUM_BOLTS; k++) {
-      const isArc = k >= 6;
-      const period = isArc ? (3.1 + (k - 6) * 1.15) : (2.35 + (k % 3) * 0.72 + k * 0.19);
-      const local = t / period + k * 0.618034 + 0.28;
+      const isArc = k >= 8;
+      const period = isArc ? (2.5 + (k - 8) * 0.65) : (1.95 + (k % 4) * 0.52 + k * 0.13);
+      const local = t / period + k * 0.618034 + 0.31;
       const cycle = Math.floor(local);
       const phase = local - cycle;
-      const duty = isArc ? 0.44 : 0.56;
+      const duty = isArc ? 0.74 : 0.80;
 
       const dIdx = k * 4;
       if (phase > duty) {
@@ -637,46 +667,45 @@
       const h2 = hash2i(cycle * 73 + k * 53,  k * 193 + 41);
       const h3 = hash2i(cycle * 19 + k * 211, k * 71 + 83);
 
-      // Staggered angle around the iris so small currents course independently across sectors
-      const th = (k / NUM_BOLTS) * TWO_PI + (h1 - 0.5) * 1.25;
+      // Spread currents evenly around all 360 degrees of the iris
+      const baseAngle = (k / NUM_BOLTS) * TWO_PI + (h1 - 0.5) * 0.72;
       const env = Math.sin(prog01 * Math.PI);
-      const crackle = 0.72 + 0.28 * Math.sin(t * 37.0 + h2 * 40.0 + k * 5.0);
-      const intensity = Math.pow(env, 0.55) * crackle * (isArc ? 0.88 : 0.96);
+      const crackle = 0.82 + 0.18 * Math.sin(t * 34.0 + h2 * 40.0 + k * 5.0);
+      const intensity = Math.pow(env, 0.35) * crackle;
 
       if (!isArc) {
-        // Small radial stromal current coursing outward or inward along a local fiber segment
-        const inward = h3 < 0.26;
-        const span = 0.24 + h2 * 0.24;
-        const uMin = inward ? (0.02 + h1 * 0.06) : (0.24 + (h1 * 0.34));
-        const uMax = Math.min(0.95, uMin + span);
+        // Small diagonal/snaking bio-electric arc cutting across radial sand fibers & crypts
+        const inward = h3 < 0.22;
+        const span = 0.28 + h2 * 0.28;
+        const uMin = inward ? (0.04 + h1 * 0.08) : (0.24 + h1 * 0.28);
+        const uMax = Math.min(0.92, uMin + span);
         const uHead = inward ? (uMax - prog01 * (uMax - uMin)) : (uMin + prog01 * (uMax - uMin));
-        const tail = (0.14 + h3 * 0.11) * (inward ? -1.0 : 1.0);
+        const tail = (0.34 + h3 * 0.18) * (inward ? -1.0 : 1.0);
 
-        boltDirs[dIdx]     = Math.cos(th);
-        boltDirs[dIdx + 1] = Math.sin(th);
+        boltDirs[dIdx]     = Math.cos(baseAngle);
+        boltDirs[dIdx + 1] = Math.sin(baseAngle);
         boltDirs[dIdx + 2] = uHead;
         boltDirs[dIdx + 3] = tail;
 
         boltParams[dIdx]     = uMin;
         boltParams[dIdx + 1] = uMax;
         boltParams[dIdx + 2] = intensity;
-        boltParams[dIdx + 3] = h2; // < 1.5 => radial fiber current
+        boltParams[dIdx + 3] = h2; // < 1.5 => diagonal branching Lichtenberg arc
       } else {
-        // Small circumferential static micro-arc jumping between adjacent collarette peaks
-        const arcSpan = 0.14 + h2 * 0.16;
+        // Circumferential static arc jumping across collarette peaks & mid-stroma
+        const arcSpan = 0.42 + h2 * 0.34;
         const dir = h3 < 0.5 ? -1.0 : 1.0;
-        const curTh = th + (prog01 - 0.5) * arcSpan * dir;
-        const uRing = 0.295 + h1 * 0.055;
+        const uRing = 0.31 + h1 * 0.16;
 
-        boltDirs[dIdx]     = Math.cos(curTh);
-        boltDirs[dIdx + 1] = Math.sin(curTh);
+        boltDirs[dIdx]     = Math.cos(baseAngle);
+        boltDirs[dIdx + 1] = Math.sin(baseAngle);
         boltDirs[dIdx + 2] = uRing;
         boltDirs[dIdx + 3] = arcSpan * dir;
 
         boltParams[dIdx]     = prog01;
         boltParams[dIdx + 1] = uRing;
         boltParams[dIdx + 2] = intensity;
-        boltParams[dIdx + 3] = 2.0 + h2; // >= 1.5 => collarette circumferential micro-arc
+        boltParams[dIdx + 3] = 2.0 + h2; // >= 1.5 => collarette circumferential arc
       }
     }
   }
@@ -887,8 +916,8 @@
       uniform float u_pupilFrac;
       uniform float u_time;
       uniform vec2 u_lightDir;
-      uniform vec4 u_boltDirs[8];
-      uniform vec4 u_boltParams[8];
+      uniform vec4 u_boltDirs[12];
+      uniform vec4 u_boltParams[12];
       uniform sampler2D u_dispTex;
       uniform sampler2D u_noiseTex;
 
@@ -899,6 +928,11 @@
       varying float v_pointSize;
       varying float v_elec;
 
+      // Sharp piecewise-linear triangle wave for crisp angular Lichtenberg electric kinks
+      float triWave(float x) {
+        return abs(fract(x) * 2.0 - 1.0) * 2.0 - 1.0;
+      }
+
       void main() {
         float u = a_posData.x;
         float cosT = a_posData.y;
@@ -906,9 +940,134 @@
         float wob = a_posData.w;
 
         float seedMode = a_styleData.w;
-        float isMist = step(3.5, seedMode);
-        float isIris = step(1.5, seedMode) * (1.0 - isMist);
-        float seed = seedMode - isIris * 2.0 - isMist * 4.0;
+        float isBolt = step(5.5, seedMode);
+        float isMist = step(3.5, seedMode) * (1.0 - isBolt);
+        float isIris = step(1.5, seedMode) * (1.0 - isMist) * (1.0 - isBolt);
+        float seed = seedMode - isIris * 2.0 - isMist * 4.0 - isBolt * 6.0;
+
+        // Dedicated Layer-4 bio-electric filament & spark sand particles
+        if (isBolt > 0.5) {
+          int bIdx = int(cosT + 0.5);
+          vec4 bd = vec4(0.0);
+          vec4 bp = vec4(0.0);
+          for (int k = 0; k < 12; k++) {
+            if (k == bIdx) {
+              bd = u_boltDirs[k];
+              bp = u_boltParams[k];
+            }
+          }
+          if (bp.z <= 0.01) {
+            gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+            gl_PointSize = 0.0;
+            v_alpha = 0.0;
+            v_lum = 0.0;
+            v_seed = seed;
+            v_radiusPx = 0.0;
+            v_pointSize = 0.0;
+            v_elec = 0.0;
+            return;
+          }
+
+          float sAlong = u;
+          float branch = sinT;
+          float crossR = wob;
+          float bMode = bp.w;
+          float crStep = floor(u_time * 16.0 + float(bIdx) * 1.7);
+
+          vec2 bDir = bd.xy;
+          vec2 bTang = vec2(-bDir.y, bDir.x);
+          float uPos;
+          float angOff;
+          float pulseEnv;
+
+          if (bMode < 1.5) {
+            float bSeed = bMode;
+            float forkStart = branch < 0.5 ? 0.0 : (branch < 1.5 ? 0.26 : (branch < 2.5 ? 0.50 : 0.0));
+            float sEff = branch < 2.5 ? mix(forkStart, min(1.0, forkStart + 0.56), sAlong) : sAlong;
+            if (branch < 0.5) sEff = sAlong;
+
+            uPos = mix(bp.x, bp.y, sEff);
+            float behind = (bd.z - uPos) / bd.w;
+            if (behind < -0.14 || behind > 1.35) {
+              gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+              gl_PointSize = 0.0;
+              v_alpha = 0.0;
+              return;
+            }
+            pulseEnv = behind < 0.0 ? exp(-behind * behind * 95.0) : exp(-behind * 1.65);
+
+            // Diagonal meandering path + sharp angular Lichtenberg zig-zags so arcs cut visibly across radial fibers
+            float slantDir = bSeed > 0.5 ? 1.0 : -1.0;
+            float diagSlant = (sEff - 0.35) * slantDir * (0.28 + bSeed * 0.26);
+            float jag = diagSlant
+                      + triWave(sEff * 4.5 + bSeed * 7.3 + crStep * 0.06) * 0.078
+                      + triWave(sEff * 13.0 - bSeed * 13.1 + crStep * 0.19) * 0.034
+                      + triWave(sEff * 37.0 + bSeed * 29.7 + crStep * 0.37) * 0.013;
+
+            if (branch > 0.5 && branch < 1.5) {
+              float dF = max(0.0, sEff - 0.26);
+              jag += dF * slantDir * 0.52 + triWave(sEff * 23.0 + bSeed * 11.0 + crStep * 0.31) * 0.024;
+              pulseEnv *= 0.88 * (1.0 - sAlong * 0.35);
+            } else if (branch >= 1.5 && branch < 2.5) {
+              float dF = max(0.0, sEff - 0.50);
+              jag -= dF * slantDir * 0.48 + triWave(sEff * 29.0 - bSeed * 17.0 + crStep * 0.29) * 0.022;
+              pulseEnv *= 0.84 * (1.0 - sAlong * 0.35);
+            }
+
+            float spread = branch > 2.5 ? 0.028 : (branch > 0.5 ? 0.0022 : 0.0026);
+            angOff = jag + crossR * spread / max(0.28, 0.24 + uPos * 0.76);
+            if (branch > 2.5) {
+              uPos += (fract(seed * 31.7 + crStep * 0.19) - 0.5) * 0.032;
+            }
+          } else {
+            // Circumferential static arc jumping tangentially across collarette peaks & stromal valleys
+            float bSeed = bMode - 2.0;
+            float prog = bp.x;
+            float headS = prog * 1.18;
+            float behind = (headS - sAlong) / 0.68;
+            if (behind < -0.14 || behind > 1.3) {
+              gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+              gl_PointSize = 0.0;
+              v_alpha = 0.0;
+              return;
+            }
+            pulseEnv = behind < 0.0 ? exp(-behind * behind * 90.0) : exp(-behind * 1.6);
+
+            float baseArc = (sAlong - 0.5) * bd.w;
+            float radKink = triWave(sAlong * 5.2 + bSeed * 9.1 + crStep * 0.11) * 0.052
+                          + triWave(sAlong * 15.0 - bSeed * 15.3 + crStep * 0.31) * 0.022
+                          + triWave(sAlong * 41.0 + bSeed * 5.7 + crStep * 0.43) * 0.009;
+            if (branch > 0.5 && branch < 2.5) {
+              float forkS = max(0.0, sAlong - 0.34);
+              radKink += forkS * (branch < 1.5 ? 0.22 : -0.19) + triWave(sAlong * 27.0 + bSeed * 3.3) * 0.014;
+              pulseEnv *= 0.84 * (1.0 - sAlong * 0.30);
+            }
+            float rSpread = branch > 2.5 ? 0.026 : 0.0028;
+            uPos = bd.z + radKink + crossR * rSpread;
+            angOff = baseArc + (branch > 2.5 ? (fract(seed * 23.1 + crStep * 0.17) - 0.5) * 0.028 : 0.0);
+          }
+
+          float ca2 = cos(angOff), sa2 = sin(angOff);
+          vec2 dir2 = vec2(bDir.x * ca2 - bDir.y * sa2, bDir.x * sa2 + bDir.y * ca2);
+          float rF = u_pupilFrac + clamp(uPos, 0.0, 1.02) * (1.0 - u_pupilFrac);
+          vec2 posB = u_res * 0.5 + dir2 * (rF * u_outerR);
+
+          vec2 clipB = (posB / u_res) * 2.0 - 1.0;
+          gl_Position = vec4(clipB.x, -clipB.y, 0.0, 1.0);
+
+          float eInt = clamp(pulseEnv * bp.z, 0.0, 1.0);
+          float radPx = a_styleData.y * pow(u_dpr, 0.78) * (0.88 + eInt * 0.34);
+          float ptSz = 2.0 * radPx + 1.5;
+          gl_PointSize = ptSz;
+
+          v_lum = clamp(0.82 + eInt * 0.25, 0.0, 1.0);
+          v_alpha = clamp(a_styleData.z * eInt * 1.15, 0.0, 1.0);
+          v_seed = seed;
+          v_radiusPx = radPx;
+          v_pointSize = ptSz;
+          v_elec = 1.0;
+          return;
+        }
 
         // Sample 3D time-evolving noise delta texture at particle's polar coordinate
         float sAng = atan(sinT, cosT) * 0.15915494 + 0.5;
@@ -968,7 +1127,7 @@
         float elec = 0.0;
         if (isIris > 0.5) {
           float CrStep = floor(u_time * 19.0);
-          for (int k = 0; k < 8; k++) {
+          for (int k = 0; k < 12; k++) {
             vec4 bp = u_boltParams[k];
             if (bp.z <= 0.005) continue;
             vec4 bd = u_boltDirs[k];
@@ -991,21 +1150,14 @@
                 ? exp(-behind * behind * 130.0)
                 : exp(-behind * 2.6);
 
-              float jag = sin(uCur * 56.0 + bSeed * 41.3) * 0.0068
-                        + sin(uCur * 139.0 - bSeed * 29.7 + CrStep * 1.9) * 0.0034
-                        + sin(uCur * 283.0 + bSeed * 13.1) * 0.0017;
+              float jag = triWave(uCur * 9.5 + bSeed * 7.3 + CrStep * 0.07) * 0.032
+                        + triWave(uCur * 27.0 - bSeed * 13.1 + CrStep * 0.23) * 0.014;
               float metric = max(0.24, 0.24 + uCur * 0.76);
               float distMain = abs(dAng - jag) * metric;
 
-              // Delicate secondary fork branching off mid-segment
-              float uFork = mix(bp.x, bp.y, 0.42);
-              float forkSign = bSeed > 0.5 ? 1.0 : -1.0;
-              float forkJag = jag + max(0.0, uCur - uFork) * forkSign * 0.13
-                            + sin(uCur * 107.0 + bSeed * 19.0 + CrStep * 1.3) * 0.0026;
-              float distFork = uCur > uFork ? abs(dAng - forkJag) * metric : 9.0;
-
-              float core = exp(-pow(distMain / 0.0016, 2.0)) + exp(-pow(distFork / 0.0013, 2.0)) * 0.72;
-              float corona = (exp(-distMain / 0.0056) + exp(-distFork / 0.0042) * 0.55) * 0.28;
+              // Local illumination halo lighting up surrounding sand ridges as the electric arc passes
+              float core = exp(-pow(distMain / 0.0024, 2.0));
+              float corona = exp(-distMain / 0.018) * 0.52;
               elec = max(elec, (core + corona) * longEnv * bp.z);
             } else {
               // Small circumferential static micro-arc jumping between collarette peaks
@@ -1344,7 +1496,12 @@
       gl.uniform4fv(uBoltDirs, boltDirs);
       gl.uniform4fv(uBoltParams, boltParams);
 
-      gl.drawArrays(gl.POINTS, 0, sand.count);
+      // Draw iris sand layers with standard alpha blending, then additive glow for bio-electric spark sand
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.drawArrays(gl.POINTS, 0, sand.irisEnd);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      gl.drawArrays(gl.POINTS, sand.irisEnd, sand.count - sand.irisEnd);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     }
 
     function frame(now) {
@@ -1448,6 +1605,7 @@
       for (let i = 0, end = sand.count * 8; i < end; i += 8) {
         const u = data[i];
         const sm = data[i + 7];
+        if (sm >= 5.5) continue;
         const isMist = sm >= 3.5;
         const isIris = !isMist && sm >= 1.5;
         const seed = sm - (isIris ? 2.0 : (isMist ? 4.0 : 0.0));
